@@ -1,0 +1,10 @@
+node_modules
+build
+.svelte-kit
+# The builder's `pnpm build` copies GSAP's files from the lockfile's gsap: a copy left in a local
+# tree, of this version or an older one, must not reach the image beside it.
+static/vendor
+# The build reads neither: .git only busts the `COPY . .` layer on every commit, and
+# a local .env must never reach an image layer (env is injected by compose at run time).
+.git
+.env*

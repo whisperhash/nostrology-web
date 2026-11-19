@@ -1,0 +1,12 @@
+.DS_Store
+node_modules
+/build
+# GSAP's files, copied from the gsap package by scripts/vendor-gsap.mjs at every dev and build
+/static/vendor/
+/.svelte-kit
+/package
+.env
+.env.*
+!.env.example
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

@@ -1,0 +1,10 @@
+# The Caddy image the site's deployment runs, and the one deploy/test-caddyfile.sh tests the
+# Caddyfile against: one source for both, so the harness cannot pass on a different Caddy than the
+# one serving. Comment lines and blank lines aside, this file holds one line: the image.
+#
+# Bump it deliberately: the harness runs in the test gate before any deploy, against the new image.
+# 2.11.7 since 2026-10-27: Docker's official images rebuild only the newest patch tag, so a fix to
+# the base image's CA roots arrives only by moving forward, and 2.11.4's base still trusted a root
+# distrusted in the 2026-10 eMudhra incident (emSign ECC Root CA - G3). 2.11.7 is also the release
+# that fixes 2.11.6's HTTP/2 crash and its cut-off of quiet SSE streams.
+caddy:2.11.7-alpine

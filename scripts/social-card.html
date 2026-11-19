@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!--
+  SOURCE for static/social-card.png - the Open Graph / Twitter card image the landing
+  page points at. Not served, not imported; it exists so the PNG can be regenerated
+  rather than re-drawn.
+
+  Regenerate (1200x630 - the size every platform crops from, at 1x), from the repo root:
+      node scripts/render-social-card.mjs            # writes static/social-card.png
+      node scripts/render-social-card.mjs --check    # exit 1 if the PNG is stale
+  Not Chrome's own --screenshot flag: it can exit without writing the PNG and say nothing
+  (it did on 2026-10-15), leaving the old card in place. The script says why.
+
+  LEGIBLE AT A PHONE'S SIZE. WhatsApp and most chat apps draw this image about 270 pt wide,
+  under a quarter of its size, so 25 px text here reads at about 6 pt there. The headline is
+  84 px and the tagline 50 px (about 11 pt in WhatsApp); keep anything meant to be read at
+  40 px or more (the operator's ask of 2026-10-15, from a WhatsApp screenshot).
+
+  Since 2026-10-15 the card names NO URL: the operator dropped the MCP endpoint from it "for
+  now". Should it come back, it is BAKED IN, unlike everywhere else on the site where it comes
+  from PUBLIC_MCP_ENDPOINT. Changing that variable therefore also means regenerating
+  this image - and NOTHING WILL TELL YOU IF YOU FORGET. The URL here is pixels, so the
+  repo-wide grep that catches every other stale copy of the host cannot see it; this
+  image outlived the 2026-09-22 host move by exactly one review. If you change the
+  endpoint, regenerate here in the same commit.
+
+  The PNG keeps its filename across such a change, deliberately. A new filename would
+  404 the og:image of every page a scraper has already cached, and it buys nothing: the
+  page URL is what a scraper keys its card on, so a host move re-scrapes everything
+  anyway, and a same-host endpoint change is not worth breaking cached cards over.
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    width: 1200px; height: 630px; overflow: hidden;
+    background: #111827; color: #f3f4f6;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 66px 72px; position: relative;
+  }
+  /* Same teal corner wash the tool cards use, at the same weight. */
+  body::after {
+    content: ''; position: absolute; right: -180px; top: -180px; width: 620px; height: 620px;
+    border-radius: 50%; background: radial-gradient(circle, rgba(45,212,191,.10), transparent 70%);
+  }
+  .brand { display: flex; align-items: center; gap: 16px; font-size: 27px; font-weight: 600; letter-spacing: .2px; }
+  .brand img { height: 52px; }
+  h1 {
+    font-size: 84px; line-height: 1.03; letter-spacing: -.035em; font-weight: 650;
+    max-width: 18ch;
+  }
+  h1 em { font-style: normal; color: #2dd4bf; }
+  /* The landing's two pillars, a line each, under the headline; the block sits at the card's
+     foot (the body spaces the brand and it apart). */
+  .tag { margin-top: 28px; font-size: 50px; line-height: 1.2; font-weight: 500; letter-spacing: -.01em; color: #d1d5db; }
+</style>
+</head>
+<body>
+  <div class="brand"><img src="../static/nostr-logo.png" alt="">nostrolo&middot;gy</div>
+  <div class="mid">
+    <h1>Nostr growth, <em>in&nbsp;numbers.</em></h1>
+    <p class="tag">Charts and stats for you.<br>Tools for your agent.</p>
+  </div>
+</body>
+</html>

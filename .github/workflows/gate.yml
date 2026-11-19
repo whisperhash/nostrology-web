@@ -1,0 +1,222 @@
+# The test gate: what every deploy that brings this repository's code to the deployment serving
+# https://nostrolo.gy, the public site, must pass first. It runs only when dispatched, and
+# holds no secret. A deploy dispatches it on main, deploys only once it ends green, and then only
+# the commit it tested; the deploy also posts its result, which this job cannot do (below).
+# Dispatched by hand, it deploys nothing:
+#   gh workflow run gate.yml -R whisperhash/nostrology-web
+#
+# It has gated every code-bringing deploy since 2026-08-23, when GA4 was found to have been
+# measuring NOTHING for 48 days: the regression guard that now catches it
+# (src/lib/analytics/ga.test.ts) only ran when a human remembered to type `npx vitest`, so the very
+# edit it exists to catch could have shipped with the test never executed. It is not worth skipping,
+# whatever it costs a deploy, and there is deliberately no skip input.
+#
+# Which deploys wait for it is set where deploys are dispatched. Since 2026-11-06 a deploy that
+# brings no code, and only restarts or reloads what an earlier deploy brought through this gate,
+# does not wait for it: a red test must not block one during an incident.
+#
+# It has no push or pull_request trigger: a deploy dispatches it on main and waits for that run, so
+# any other run would be one nothing reads. scripts/gate-workflow.test.mjs holds that.
+#
+# The job holds no secret, deliberately: a package that runs here with sudo can read any secret the
+# job references, from the runner's memory. So it cannot post to Discord. Its summary step prints
+# what it found, and the deploy reads that from the log and posts it, green or red.
+# scripts/gate-workflow.test.mjs holds this file's shape.
+name: Test gate
+run-name: Test gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "The verb of the deploy waiting on this run, if any. Accepted and not shown: every run is titled the same"
+        type: string
+        required: false
+        default: ""
+
+# Nothing by default: the job says what it holds, which is a read of the code and nothing else.
+permissions: {}
+
+jobs:
+  test:
+    permissions:
+      contents: read
+    # Ubuntu 24.04 has Docker, for the scratch Postgres and the Caddyfile harness.
+    runs-on: ubuntu-24.04
+    # About 8 minutes; this is about twice that, so a hung step fails the job.
+    timeout-minutes: 15
+    steps:
+      # By commit, as the deploy's own action is: a tag can be moved to new code by whoever holds
+      # the action's repository. persist-credentials: leaves no token in .git/config for the tests
+      # to read.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        id: checkout
+        with:
+          persist-credentials: false
+
+      # Without Docker this job cannot run. Say so, rather than fail later in a way that reads like
+      # a broken database or test.
+      - name: Docker is here
+        id: docker
+        run: |
+          echo "GATE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          if ! command -v docker > /dev/null; then
+            echo "::error::no Docker here, so the scratch Postgres and the Caddyfile harness cannot run. Not a test failure."
+            exit 1
+          fi
+
+      # pnpm's version has ONE source, package.json's "packageManager" field: this
+      # action reads it when no `version:` input is given (and errors if one is given
+      # that disagrees), and the Dockerfiles derive it from the same field.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        id: setup-pnpm
+      # cache: pnpm keeps pnpm's store between runs, under a key of pnpm-lock.yaml, so
+      # `pnpm install` below links what is already there and fetches only what changed.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        id: setup-node
+        with:
+          node-version: 22          # checked against both Dockerfiles below
+          cache: pnpm
+      # Node's major version has ONE source per repository, and it is stated in three
+      # places that have to agree: this input, which decides what the tests run on, and
+      # each Dockerfile's `# base-pin:` line, which records the tag its digest was
+      # resolved for. Until 2026-10-26 the agreement was only a comment - and the
+      # comment was right while the pin was stale by two majors. Read, compare, fail.
+      - name: Node major has exactly one source
+        id: node-major
+        run: |
+          set -euo pipefail
+          want=$(grep -oE '^ *node-version: *[0-9]+' .github/workflows/gate.yml \
+                 | grep -oE '[0-9]+$' | sort -u)
+          if [ "$(printf '%s\n' "$want" | wc -l | tr -d ' ')" != "1" ]; then
+            echo "::error::gate.yml states more than one node-version: $want"
+            exit 1
+          fi
+          fail=0
+          for f in Dockerfile Dockerfile.local; do
+            pin=$(grep -oE '^# base-pin: node:[0-9]+' "$f" | grep -oE '[0-9]+$' || true)
+            if [ -z "$pin" ]; then
+              echo "::error file=$f::no '# base-pin: node:<major>' line; a digest with no recorded tag cannot be checked"
+              fail=1
+              continue
+            fi
+            from=$(grep -oE '^FROM node:[0-9]+' "$f" | grep -oE '[0-9]+$' || true)
+            if [ "$pin" != "$want" ] || [ "$from" != "$want" ]; then
+              echo "::error file=$f::node major disagrees: base-pin=$pin, FROM=$from, node-version=$want"
+              fail=1
+            fi
+            if ! grep -qE '^FROM node:[0-9]+-alpine@sha256:[0-9a-f]{64}' "$f"; then
+              echo "::error file=$f::the base is not pinned by digest"
+              fail=1
+            fi
+          done
+          exit "$fail"
+      # Guard: a pnpm@<digits> literal anywhere else is a second copy waiting to drift.
+      - name: pnpm version has exactly one source
+        id: pnpm-version
+        run: |
+          if grep -nE 'pnpm@[0-9]' Dockerfile Dockerfile.local .github/workflows/*.yml; then
+            echo "::error::pin pnpm only in package.json's packageManager field"
+            exit 1
+          fi
+      - name: pnpm install
+        id: install
+        run: pnpm install --frozen-lockfile
+
+      # For the tests in src/lib/db, the only ones that run the production SQL: each that needs the
+      # database runs a query from postgres.ts verbatim against temporary tables, so the database
+      # needs no schema. The rest there mock the driver to test what the readers do with its rows.
+      # - The digest is the one nostrology-data's gate pins, so the two can move together. Stay on
+      #   production's major version, 16.
+      # - The locale: production's default collation is en_US.UTF-8 from glibc, which ignores case,
+      #   accents and punctuation at the first level, and the image's own compares bytes, so a plain
+      #   ORDER BY on text would sort differently here. ICU's en-US-u-ka-shifted sorts as glibc does
+      #   at that level; plain en-US matches it on case and accents only, and sorts URLs and dotted
+      #   keys as bytes do. The last lines check that by behaviour: both comparisons are true in
+      #   production and false on bytes and on plain en-US.
+      # - --tmpfs keeps it off the disk. Without it the image's anonymous volume would outlive the
+      #   job.
+      # - docker rm first clears the record of a container left by a killed job.
+      - name: Scratch Postgres
+        id: scratch-postgres
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          docker rm -fv test-pg > /dev/null 2>&1 || true
+          docker run -d --name test-pg --tmpfs /var/lib/postgresql/data \
+            -e POSTGRES_PASSWORD=dbtest \
+            -e POSTGRES_INITDB_ARGS='--locale-provider=icu --icu-locale=en-US-u-ka-shifted' \
+            -p 127.0.0.1:15441:5432 \
+            postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab > /dev/null
+          ok=0
+          for i in $(seq 1 120); do
+            # -h 127.0.0.1: the image's init phase answers on the socket only, then restarts.
+            if docker exec test-pg pg_isready -U postgres -h 127.0.0.1 -q; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != 1 ]; then docker logs test-pg | tail -20; exit 1; fi
+          echo "ready after about ${i} s"
+          sorts=$(docker exec test-pg psql -U postgres -Atc "SELECT 'a' < 'B' AND 'https://minta.io' < 'https://mint.coinos.io'")
+          if [ "$sorts" != t ]; then
+            echo "::error::the scratch database does not sort text as production does"
+            exit 1
+          fi
+
+      # Naming reporters here turns off the github-actions one vitest adds by itself, so it is named
+      # too: it is what puts a failing test on the run's page.
+      - name: vitest
+        id: vitest
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:dbtest@127.0.0.1:15441/postgres
+        run: pnpm exec vitest run --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit="$RUNNER_TEMP/vitest.xml"
+
+      # Even after a failed step, so no container is left waiting for the next job.
+      - name: Stop Postgres
+        if: ${{ always() }}
+        run: docker rm -fv test-pg > /dev/null 2>&1 || true
+
+      # vitest exits 0 with every database test skipped, so a broken database would turn this green
+      # again with nothing run. The ceiling is today's opt-in skips, which want a real /git document
+      # rather than a database. The floor is about 90% of the tests that run, and catches a suite
+      # that lost much of itself.
+      - name: No more tests skipped than today, and not far fewer run
+        id: skip-ceiling
+        run: python3 scripts/check_skip_ceiling.py "$RUNNER_TEMP/vitest.xml:7:2040"
+
+      # The floor cannot see this: every file here together is well under its margin, and a moved
+      # directory or a narrowed `include` loses them with nothing skipped. A new test file here
+      # changes this number too, and scripts/gate-workflow.test.mjs says so before any push.
+      - name: Every test file in src/lib/db ran
+        id: db-files
+        run: |
+          found=$(grep -c '<testsuite name="src/lib/db/' "$RUNNER_TEMP/vitest.xml" || true)
+          if [ "$found" != 10 ]; then
+            echo "::error::$found test files in src/lib/db ran, not 10. They hold every test of the production SQL."
+            exit 1
+          fi
+
+      - name: pnpm run check
+        id: check
+        run: pnpm run check
+      # The Caddyfile's behavioural harness: hosts, redirects, headers, loggers, CORS
+      # (added 2026-10-14). `caddy reload` proves only that the file loads, so this is the
+      # only routing check before a deploy. It tests the DISPATCHED ref; a reload applies only
+      # a Caddyfile that a code-bringing deploy installed, and that deploy ran this harness
+      # on it. It needs only Docker, and pulls the Caddy image deploy/caddy-image names, the
+      # one the deployment runs; a failed pull fails the job, so nothing deploys.
+      - name: The Caddyfile harness
+        id: caddy
+        run: ./deploy/test-caddyfile.sh
+
+      # What the gate found, for the deploy's post: the deploy reads the one line
+      # GATE_SUMMARY_B64=<base64> from this job's log, the last such line. continue-on-error: this
+      # step must not be able to turn a green gate red.
+      - name: Summary for the deploy's post
+        id: summary
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          STEPS: ${{ toJSON(steps) }}
+        run: |
+          python3 scripts/gate_summary.py "vitest=$RUNNER_TEMP/vitest.xml" | tee "$RUNNER_TEMP/gate-summary.txt"
+          echo "GATE_SUMMARY_B64=$(base64 < "$RUNNER_TEMP/gate-summary.txt" | tr -d '\n')"

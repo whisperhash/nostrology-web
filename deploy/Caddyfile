@@ -1,0 +1,683 @@
+# Caddyfile - public TLS reverse proxy for the nostrology web UI at nostrolo.gy.
+#
+# HOSTS (since 2026-09-22). `nostrolo.gy` is the single content host. `dev.nostrolo.gy`
+# (the content host until then) and `www.nostrolo.gy` are ALIASES that 308 every request to
+# the same path on the apex, so the dev.* links already published - including ones inside
+# immutable Nostr notes - keep resolving. `blossom.nostrolo.gy` is the Nectar blob store.
+#
+# Caddy terminates TLS (auto Let's Encrypt) on 80/443 and forwards to the SvelteKit app
+# container over the deployment's container network.
+#
+# Cert + ACME account key persist under /data, which the deployment keeps on storage that
+# outlives the container, so a container recreate does NOT re-run ACME. Let's Encrypt caps
+# duplicate certs at 5/week per exact domain set - re-issuing on every deploy would lock
+# issuance for a week. Losing /data is the one way to regress this.
+
+# --- Access-log filter -------------------------------------------------------------------
+# Imported into every `format filter` in this file: the three site `log` blocks and the
+# global `log default`, which takes every line the site loggers do not - Caddy's error
+# lines, its reverse_proxy, TLS and admin lines, and the HTTP-to-HTTPS redirect server's
+# lines for host names no site claims. It sits ABOVE the global options block on purpose: a snippet
+# defined after that block cannot be imported inside `log default` (Caddy then fails to
+# adapt the file, "File to import not found").
+#
+# What it keeps out of every line:
+#   - the client's address: `remote_ip`, `client_ip` and `remote_port` under `request`;
+#     the same three, `remote_addr` and `remote` at the top level, where the TLS and admin
+#     loggers put them (an ALPN `acme-tls/1` probe logs one); and the request headers that
+#     can carry an address. A visitor's own proxy or gateway may add those in front of us,
+#     and reverse_proxy adds X-Forwarded-For on its way upstream, which its warning lines
+#     log;
+#   - every IP address inside an `error` field. The warning reverse_proxy logs when a
+#     client hangs up mid-response quotes the socket, `write tcp <ours>-><theirs>`;
+#   - `If-None-Match`, `If-Match`, `If-Range` and the response's `Etag`. A signed-in
+#     visitor's page embeds their pubkey, so its ETag is unique to them. Browsers still
+#     receive and send them; only the logged copies go;
+#   - `X-Api-Key` and `X-Cashu`, which carry credentials in clear. Caddy itself redacts
+#     only `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization`.
+#
+# The URI is logged as it arrived.
+#
+# A message (`msg`) cannot be filtered at all. None of Caddy's carries a client address at
+# the default INFO level: the standard library's TLS handshake errors, which do, are logged
+# at DEBUG.
+#
+# HEADER NAMES ARE CANONICAL, as Go writes them: `Cf-Connecting-Ip`, `X-Real-Ip`, `Etag`.
+# The logged keys are canonical, so a rule keyed any other way (`CF-Connecting-IP`,
+# `ETag`) is ignored without an error. test-caddyfile.sh section 13 sends every one of
+# these, spelled the other way, and reads the log back.
+(log-filter) {
+	remote_ip delete
+	remote_port delete
+	remote_addr delete
+	remote delete
+	error regexp `(\d{1,3}\.){3}\d{1,3}(:\d+)?|\[[0-9A-Fa-f:.%]+\](:\d+)?` [addr]
+	request>remote_ip delete
+	request>client_ip delete
+	request>remote_port delete
+	request>headers>X-Forwarded-For delete
+	request>headers>X-Forwarded delete
+	request>headers>Forwarded delete
+	request>headers>Forwarded-For delete
+	request>headers>X-Real-Ip delete
+	request>headers>Client-Ip delete
+	request>headers>X-Client-Ip delete
+	request>headers>X-Cluster-Client-Ip delete
+	request>headers>X-Originating-Ip delete
+	request>headers>True-Client-Ip delete
+	request>headers>Cf-Connecting-Ip delete
+	request>headers>Cf-Connecting-Ipv6 delete
+	request>headers>Cf-Pseudo-Ipv4 delete
+	request>headers>Fastly-Client-Ip delete
+	request>headers>Fly-Client-Ip delete
+	request>headers>X-Appengine-User-Ip delete
+	request>headers>X-Envoy-External-Address delete
+	request>headers>X-Original-Forwarded-For delete
+	request>headers>Cloudfront-Viewer-Address delete
+	request>headers>X-Azure-Clientip delete
+	request>headers>X-Azure-Socketip delete
+	request>headers>Incap-Client-Ip delete
+	request>headers>X-Proxyuser-Ip delete
+	request>headers>Wl-Proxy-Client-Ip delete
+	request>headers>Proxy-Client-Ip delete
+	request>headers>If-None-Match delete
+	request>headers>If-Match delete
+	request>headers>If-Range delete
+	request>headers>X-Api-Key delete
+	request>headers>X-Cashu delete
+	resp_headers>Etag delete
+}
+
+# STAGING-FIRST (one-time, at first issuance): export CADDY_ACME_CA to the LE *staging*
+# directory so a first-boot misconfig (wrong A record, SG typo, unreachable upstream)
+# burns the lenient staging limits, not production's failed-validation limits. Verify
+# the whole path green (cert issued, https loads), then drop the override and recreate
+# to obtain a real, browser-trusted cert.
+#
+# CADDY_ACME_CA is ALWAYS set: the compose service defaults it to the LE PRODUCTION
+# directory (so a plain deploy gets a real cert), and the operator overrides it to
+# staging for the dry-run. We do NOT use Caddy's `{$VAR:default}` fallback here -
+# compose passes the var set-but-possibly-empty, and an empty `acme_ca` is a Caddyfile
+# PARSE ERROR (crash-loop). Keeping the default in compose guarantees a non-empty value.
+{
+	acme_ca {$CADDY_ACME_CA}
+	# The admin API stays on its default localhost:2019 INSIDE the container and is
+	# never published - do NOT add 2019 to the compose `ports:`. It can change the
+	# running configuration, so nothing outside the container may reach it.
+
+	# Everything the site `log` blocks below do not take: Caddy's error lines, its
+	# reverse_proxy, TLS and admin lines, and the redirect server's lines for host names no
+	# site claims. Filtered like the access logs, and written to stderr, where Caddy's
+	# default log goes anyway.
+	log default {
+		output stderr
+		format filter {
+			import log-filter
+			wrap json
+		}
+	}
+}
+
+# --- Access logging: first-party web traffic capture ---------------------------------
+# EVERY site block below emits a JSON access log to stdout. The deployment's log shipper
+# collects every container's stdout and stderr into Loki, so these land as
+# {container="nostrology-caddy"} with no change to the log shipper.
+#
+# WHY PER-SITE, AND THE TRAP: Caddy has no global "log everything" switch - access
+# logging is a per-site-block directive, and a site block WITHOUT `log` is completely
+# SILENT. That is exactly how this stack ran until 2026-07-25: the only request-level
+# data reaching Loki was ~42 accidental WARN lines/day from reverse-proxy aborts.
+# ANY NEW SITE BLOCK ADDED HERE MUST GET ITS OWN `log` OR ITS TRAFFIC IS INVISIBLE - and
+# that `log` must use `format filter` with `import log-filter`, like the three below.
+#
+# The named logger is stamped into every line as "logger":"http.log.access.<name>", and it
+# names a ROLE, never a host or an environment:
+#   access_site     the content host (nostrolo.gy) - the requests the site actually served
+#   access_alias    the alias hosts (dev.nostrolo.gy, www.nostrolo.gy) - 308 hops, each one
+#                   normally followed by an access_site line for the same request, so
+#                   REQUEST COUNTS COME FROM access_site ONLY or old links count twice
+#   access_blossom  the Nectar blob store
+# `request.host` says which NAME a client used; Loki's `env` label says which ENVIRONMENT
+# logged it. Filtering on the logger also separates access lines from Caddy's own
+# operational chatter (ACME/TLS maintenance) on the same container stream.
+#
+# RETIRED 2026-09-22, NEVER TO BE REUSED: `access_web` (the content host while it was
+# dev.nostrolo.gy) and `access_redirect` (apex + www, then 302s to dev). New names instead of
+# a rename in place, so a query written for either era fails EMPTY after the change - a
+# visible drop to zero - instead of silently counting the other population.
+#
+# WHAT A LINE CARRIES: the URI, status, duration, sizes, the TLS parameters, and the
+# request and response headers (User-Agent, Referer, Accept-Language and the rest), minus
+# what (log-filter) at the top of this file keeps out: no client address, no ETag header
+# and no credential header.
+#
+# Cookies are safe because CADDY REDACTS THEM BY DEFAULT: `Cookie`, `Set-Cookie`,
+# `Authorization` and `Proxy-Authorization` are logged as `["REDACTED"]` with no
+# configuration on our part - verified live 2026-07-26 by probing with
+# `Cookie: probe_marker=abc123` and reading it back out of Loki. So no cookie value
+# reaches Loki: not the session cookie, not the operator marker below, not GA4's `_ga`.
+#
+# Do NOT reach for the global `log_credentials` option to make a cookie visible. It is
+# all-or-nothing: it would log EVERY visitor's cookies, the session cookie included. See
+# (operator-marker) below for the supported way to surface a tag derived from a cookie -
+# match the cookie, then `log_append` a top-level scalar into the log entry. The cookie's VALUE is
+# never logged; only the derived tag is.
+#
+# Because a Caddyfile edit does not change the container spec, deploying a change to
+# these blocks is TWO steps: install the new file where the deployment keeps it, then
+# reload the running Caddy (`caddy reload`), which applies it. Installing the file, or
+# restarting the app, will NOT apply an edit, and a reload alone applies only the copy
+# already installed.
+
+# --- Shared scanner-junk filter -------------------------------------------------------
+# Imported by EVERY site block below. 404s opportunistic scanner probes at the edge so
+# they never reach a backend. The invariant is deliberately uniform - "every site block
+# imports junk-filter" - because the previous per-block copy was the bug: the list lived
+# only in the content block, so blossom had no filter at all.
+#
+# Why it matters per-vhost:
+#   - nostrolo.gy           NOT because of the root-level probes: `/xmlrpc.php` etc match
+#                           no SvelteKit route, so adapter-node 404s them without running
+#                           a loader and never touches the DB. The real case is the
+#                           CATCH-ALL routes - `relays/[...relay]` and
+#                           `nutzaps/mints/[...mint]` capture multi-segment paths and
+#                           their loaders call getRelayDetail()/the mint query
+#                           UNCONDITIONALLY. So `/relays/wp-includes/wlwmanifest.xml`
+#                           would otherwise cost an Aurora query per probe. (It used to
+#                           wake a paused cluster too; the cluster no longer pauses.)
+#   - blossom.nostrolo.gy   a GET/HEAD matches `@ro` and is proxied to nectar-sigv4,
+#                           which SigV4-signs it and burns an S3 round-trip to get back
+#                           NoSuchKey.
+#   - dev/www (aliases)     only 308, so there is no backend to protect; included anyway
+#                           to keep the invariant uniform (a conditional rule is the kind
+#                           a future site block silently gets wrong) and to save the
+#                           scanner's second round-trip into the apex.
+#
+# ONE `path_regexp`, not a `path` list plus a regexp: within a single named matcher,
+# different matcher TYPES are ANDed - `path` + `path_regexp` together match only their
+# INTERSECTION - while multiple values of ONE matcher are ORed. A single regexp is
+# therefore the only way to express an OR across these patterns in one matcher.
+#
+# The `/wp-(admin|includes|content)` branch is intentionally UNANCHORED so it also catches
+# the path-prefixed variants scanners actually use. Observed live on blossom 2026-07-25:
+# /blog/, /web/, /wordpress/, /website/, /wp/, /news/, /2018/, /2019/, /shop/, /wp1/,
+# /test/, /media/, /wp2/, /site/, /cms/, /sito/ - each + /wp-includes/wlwmanifest.xml.
+# The old content-block-only `@junk` list matched NONE of those, so this widened coverage
+# on the content host too, not just blossom.
+#
+# Scoped tightly on purpose: every branch is either a full-path match or requires a
+# `/wp-*` path SEGMENT (the `(/|$)` boundary also fixes a pre-existing false positive -
+# the old `path /wp-admin*` prefix glob matched `/wp-adminish`).
+#
+# Being unanchored, branch 3 DOES overlap the `[...relay]` / `[...mint]` catch-all
+# namespaces: `/relays/wp-content/x` now 404s at the edge instead of reaching the app.
+# That is empty in practice (no relay URL carries a `/wp-content/` segment) and is the
+# deliberate trade - but it is an overlap, not an impossibility.
+#
+# `./test-caddyfile.sh` asserts all of this against the REAL file (the count is printed at
+# the end: junk refused on every vhost, app routes + 64-hex blob keys untouched, the alias
+# 308s and their headers, the operator marker, the /mcp handle's junk /
+# robots behaviour, HSTS per host,
+# the logger each host writes to and what (log-filter) keeps out of it). Run it after
+# ANY edit to this file - `caddy validate` only proves the file parses, not that it
+# routes.
+(junk-filter) {
+	@junk path_regexp (?i)^/(ads\.txt|app-ads\.txt|sellers\.json)$|(^|/)(xmlrpc\.php|wp-login\.php)$|/wp-(admin|includes|content)(/|$)
+	handle @junk {
+		respond 404
+	}
+}
+
+# --- Operator self-identification -----------------------------------------------------
+# Tags the operator's own requests, so first-party traffic analysis can separate "me" from
+# real visitors. The access log keeps no client address (see (log-filter)), so this tag is
+# what tells them apart.
+#
+# THE OPERATOR IS WHOEVER IS SIGNED IN WITH THE OPERATOR'S NOSTR KEY, and only while they
+# are. The app's login response sets the cookie matched here, `__Host-nozzl_op`, beside the
+# session cookie and with the same lifetime (400 days, for the operator), and its logout
+# response clears both: src/lib/server/auth/config.ts, OPERATOR_MARKER_COOKIE. So signing out,
+# or the session expiring, ends the tag, and the app clears a marker that arrives without the
+# operator's session (src/hooks.server.ts). Nothing here sets or renews a cookie.
+#
+# THE VALUE IS A SECRET that only this Caddy and the app hold: OPERATOR_MARKER, 64 hex
+# characters from the environment, which the deployment generates. Matching an exact secret is
+# what makes the tag unforgeable. The session cookie would not do: its pubkey is in clear and
+# its HMAC is beyond Caddy, so a rule keyed on it could be met by anyone writing a fake one.
+# The `size` guard fails CLOSED: with OPERATOR_MARKER unset or empty, `{$OPERATOR_MARKER}`
+# reads "", and so does the cookie placeholder of a request that carries no marker at all -
+# without the guard EVERY visitor would be tagged. With it nothing is (test-caddyfile.sh
+# section 6 runs both cases).
+#
+# WHAT IS TAGGED: every request carrying the cookie, static assets and SvelteKit's
+# __data.json included. The app never sees the assets (adapter-node serves them before any
+# hook runs), which is why the tag is made here. This host only: the cookie is host-only, so
+# the blob store and the alias hosts never receive it. `curl`, DuckDB/httpfs and scripts carry
+# no cookie jar and are never tagged; scripts mark themselves with their User-Agent instead.
+#
+# NOT GOOGLE ANALYTICS: the app decides that from the verified session alone
+# (src/hooks.server.ts). A leaked marker would fake this tag and nothing else.
+#
+# ROTATING: the deployment regenerates the marker with the session key (each new key means a
+# new marker), and a new value leaves every browser untagged until it signs in again.
+#
+# WHY A DERIVED TAG RATHER THAN LOGGING THE COOKIE: Caddy redacts `Cookie`,
+# `Set-Cookie`, `Authorization` and `Proxy-Authorization` in access logs as `["REDACTED"]`
+# BY DEFAULT - verified live 2026-07-26 by probing with `Cookie: probe_marker=abc123`,
+# which logged as REDACTED. The only way to log cookie VALUES is the global
+# `log_credentials` option, which would log EVERY visitor's cookies, the session cookie -
+# a credential - among them. So instead: match on the cookie (matchers can read it even when the log
+# encoder redacts it) and `log_append` the tag. No credential logging is enabled anywhere, and
+# the marker's value is never logged.
+#
+# LogQL - note the array-safe extraction, `| json` alone will NOT work for resp_headers:
+#   operator only : {container="nostrology-caddy"} |= "handled request" | json | operator="1"
+#   everyone else : {container="nostrology-caddy"} |= "handled request" | json | operator=""
+(operator-marker) {
+	@op_marked expression `{http.request.cookie.__Host-nozzl_op} == "{$OPERATOR_MARKER}" && size("{$OPERATOR_MARKER}") == 64`
+
+	# THE DATA PATH. `log_append` writes a TOP-LEVEL SCALAR field into the access log
+	# entry, so `| json | operator="1"` just works. Do NOT switch this to keying off the
+	# response header below: `resp_headers` values are JSON ARRAYS and Loki's `| json`
+	# silently skips arrays, so `| json | resp_headers_X_Nozzl_Operator="1"` matches
+	# NOTHING while `...=""` matches EVERYTHING - wrong in the dangerous direction, since
+	# both look plausible. (The logged User-Agent is an array too: the same trap.)
+	# The `<` makes it EARLY: the field is added before the request is handled, so it is
+	# still there when a proxied response aborts mid-body. Without it the field is added
+	# on the way back out, and exactly those lines lose it.
+	log_append @op_marked <operator 1
+
+	# THE SELF-CHECK, and only that. Nothing consumes it server-side. It exists because
+	# the cookie is HttpOnly, so the operator needs a way to confirm - devtools -> Network ->
+	# any response - that this browser is tagged. The site's yellow analytics-off dot does not
+	# say so: it shows the session, and the tag needs the marker too. Safe to emit: TLS
+	# terminates at Caddy, no CORS expose-headers is set anywhere, and nothing is gated on it,
+	# so it is visible only to the operator's own browser and reveals nothing to third parties.
+	header @op_marked +X-Nozzl-Operator "1"
+}
+
+# LINK PREVIEWS IN WEB-BASED NOSTR CLIENTS (2026-10-14). Some web clients build a link
+# card IN THE BROWSER: they fetch() the linked page and read its og: tags. noStrudel
+# does it by default, and so do Jumble forks on older builds (kozter.nostr.hu,
+# fevela.me). Nostter does it when its own proxy fails, after a HEAD to sniff the media
+# type. A cross-origin read needs Access-Control-Allow-Origin on the response. Until
+# this date we sent none, so the browser downloaded our page and then hid it from the
+# client's script, and the card silently failed. Measured over the 30 days to
+# 2026-10-14: 35 such reads of our pages from 9 client origins, every one blocked.
+# Server-side unfurlers (Primal, jumble.social's scout, Nostter's proxy, YakiHonne,
+# Snort, Coracle, Ditto and the like) never needed this, which is why the gap went
+# unnoticed.
+#
+# `*`, not an echoed Origin: every page here is public, and `*` is the one value a
+# browser refuses to combine with credentials. A cross-origin request that does send
+# our cookies (a same-site page such as blossom.nostrolo.gy can) gets its response
+# withheld, so other origins only ever read the anonymous page. Responses DO vary by
+# cookie - the session and the operator marker - and `*` withholds both. That holds
+# only while no GET/HEAD response depends on the client's IP or on a credential other
+# than cookies, which is true today: no remote_ip/client_ip matcher here, and the app
+# never reads the client address. Anything gated that way would have to be excluded
+# below. No response header is exposed (no Access-Control-Expose-Headers), so
+# X-Nozzl-Operator above stays unreadable to other origins. GET and HEAD only: Nostter
+# sends a HEAD first, and a simple GET/HEAD needs no preflight. NOT /mcp or /api: those
+# are APIs with their own rules, not pages anyone previews. If GET /mcp
+# ever serves a human page, that page must send its own Access-Control-Allow-Origin
+# (or this exclusion be narrowed), and section 12's /mcp assertions and the /mcp
+# checks in scripts/verify-link-previews.mjs change with it, deliberately.
+#
+# `?` sets the header only when the response has none, so an upstream that sends its
+# own Access-Control-Allow-Origin keeps it. A plain set would run before
+# reverse_proxy, which then ADDS the upstream's header, and the response would carry
+# two values, which browsers reject outright (verified on caddy:2.11.4).
+#
+# Imported by the content host AND the alias hosts. Browsers apply the CORS check to a
+# redirect response too, so a card for an old dev.nostrolo.gy link (several published
+# Nostrology posts use one) needs the header on the alias 308 as well as on the page
+# it points at; SvelteKit's trailing-slash 308s pass through the content host's copy.
+#
+# Tests: deploy/test-caddyfile.sh section 12, which also runs in the deploy workflow's
+# test job. On the live site, after a deploy: node scripts/verify-link-previews.mjs.
+(link-preview-cors) {
+	@link_preview_cors {
+		method GET HEAD
+		not path /mcp /mcp/* /api /api/*
+	}
+	header @link_preview_cors ?Access-Control-Allow-Origin "*"
+}
+
+nostrolo.gy {
+	# Access log -> (log-filter) -> stdout (JSON) -> the log shipper -> Loki. See the access-logging
+	# note above.
+	log access_site {
+		output stdout
+		format filter {
+			import log-filter
+			wrap json
+		}
+	}
+
+	# Tag the operator's own requests; see (operator-marker) above. This host only.
+	import operator-marker
+
+	header {
+		# HSTS, 1 year: the ordinary value for a site that is staying. Deliberately NO
+		# `includeSubDomains`: it would pin every current and future subdomain to HTTPS -
+		# including a subdomain served by another host - on the strength of
+		# this one host. No `preload` either (that asks browsers to ship the pin built in,
+		# which is slow to undo and needs includeSubDomains anyway). Caddy already
+		# 308-redirects http->https for us.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	# Readable by web-based Nostr clients that build link cards in the browser; see
+	# (link-preview-cors) above.
+	import link-preview-cors
+
+	# --- robots.txt: the site is OPEN to crawlers (2026-09-22) --------------------
+	# It used to be `Disallow: /` with a single `Allow: /data`, guarding a PAUSED Aurora
+	# cluster: any DB-backed render woke it for a 300s autopause window, so scattered bot
+	# hits kept it awake. That reason is gone - since 2026-08-03 the cluster holds a 0.5
+	# ACU warm floor and does not pause (verified live: MinCapacity 0.5,
+	# SecondsUntilAutoPause null). What remains is a 1.0 ACU CEILING, so a crawl is
+	# bounded by capacity rather than by cost: the failure mode to watch is slow pages
+	# under a heavy crawl, not a surprise bill.
+	#
+	# Answered straight from Caddy, so it never starts the app and never touches the DB.
+	#
+	# It names NONE of the hidden pages. robots.txt is public and permanent: a Disallow
+	# line publishes the very path it is asking crawlers to skip, and a crawler is not
+	# the only thing that reads it. The hidden set (/wip, /routstr, /zapstore/apps,
+	# /relays and its subtree - the authority is HIDDEN_TREES/HIDDEN_EXACT in
+	# src/lib/seo/sitemap.ts, not this list) is kept out of the index with `noindex` on
+	# the pages themselves
+	# and by simply not appearing in the sitemap - both of which a hostile reader gains
+	# nothing from.
+	#
+	# /mcp is Disallowed as two lines, not one prefix: a bare `Disallow: /mcp` would also
+	# match /mcpfoo. There is nothing for a crawler at the MCP endpoint - it is JSON-RPC
+	# over POST and a GET is a protocol error - so crawling it only spends both sides'
+	# time. /api/ is listed for the same reason.
+	handle /robots.txt {
+		header Content-Type "text/plain"
+		respond `User-agent: *
+Disallow: /mcp$
+Disallow: /mcp/
+Disallow: /api/
+
+Sitemap: https://nostrolo.gy/sitemap.xml
+` 200
+	}
+
+	# Ad-tech / SEO probe junk (observed live: /ads.txt, /app-ads.txt, /sellers.json) plus
+	# the ubiquitous WordPress-scanner noise - 404 at the edge, never proxied to the app.
+	# Definition is shared with every other site block; see (junk-filter) above.
+	# NB ordering: junk-filter comes BEFORE the /mcp handle below, so a scanner probing
+	# /mcp/xmlrpc.php still 404s at the edge. (This said "/mcp and /data handles" until
+	# 2026-09-23; there is no /data handle - it was deleted when the site opened to
+	# crawlers, and /data is now served by the catch-all like any other page.)
+	import junk-filter
+
+	# --- MCP endpoint: nostrolo.gy/mcp -> nostrology-mcp:8080 (nozzl-mcp-net) ---
+	# Until 2026-09-22 this handle's placement was load-bearing: it had to precede a
+	# User-Agent deny-list (@badbots) that would otherwise have 403'd real MCP clients,
+	# which identify as exactly the HTTP-library UAs that list denied. That list is gone,
+	# so the ordering constraint is gone with it - but the reasoning is kept because it
+	# is the argument against reintroducing one: an MCP tool call touching Aurora is the
+	# PRODUCT here, bounded by the nostrology_mcp role caps (CONNECTION LIMIT 32,
+	# statement_timeout
+	# 10s) and the cluster's ACU dial. POSTs get plain-JSON responses (json_response
+	# mode); the GET SSE channel is why flush_interval -1 (no proxy buffering).
+	# Named matcher, not `handle /mcp /mcp/*`: handle accepts at most ONE matcher
+	# token, but one PATH matcher takes multiple values (ORed). /mcp exact + subpaths;
+	# deliberately NOT the /mcp* glob, which would also claim /mcpfoo.
+	@mcp path /mcp /mcp/*
+	handle @mcp {
+		# Strip a trailing slash BEFORE proxying, so /mcp/ is served rather than
+		# redirected. This is a security fix, not tidiness: Starlette's redirect_slashes
+		# answers /mcp/ with a 307 to an ABSOLUTE url, and it builds that url from the
+		# scheme uvicorn thinks it is serving. uvicorn's forwarded_allow_ips defaults to
+		# 127.0.0.1, and Caddy reaches the container across the nozzl-mcp-net bridge from
+		# a different address, so X-Forwarded-Proto: https is discarded and the Location
+		# comes back as http://. A 307 preserves the method AND the body, and one of the
+		# MCP tools takes a single-use Cashu token as a POST argument - bearer money. A
+		# client one character off the published URL would resend that token in the clear.
+		# curl hides this (it has its own HSTS cache); the Python and TypeScript MCP SDKs
+		# do not implement HSTS and would send it plaintext.
+		#
+		# Rewriting here rather than setting forwarded_allow_ips keeps the container
+		# trusting nothing: no proxy header gains authority, and there is no second
+		# round trip. The MCP server serves exactly one path, so exactly one form of it
+		# needs normalising.
+		@mcp_slash path /mcp/
+		uri @mcp_slash strip_suffix /
+		reverse_proxy nostrology-mcp:8080 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else -> the app.
+	#
+	# The @badbots User-Agent deny-list used to sit in front of this, 403ing commercial
+	# SEO and AI-training crawlers plus generic HTTP-library clients. It was never about
+	# disliking crawlers: it existed to stop DB-backed renders waking a PAUSED Aurora
+	# cluster. The cluster stopped pausing on 2026-08-03 (0.5 ACU warm floor), so the
+	# deny-list was guarding against a cost that no longer exists - while blocking the
+	# exact agents this site now wants reading it. Removed 2026-09-22 with the rest of
+	# the crawler opening; if bot load ever becomes a problem again the answer is rate
+	# limiting, which needs a non-stock Caddy build, not a UA list that anything can spoof.
+	handle {
+		# Compression, scoped HERE rather than at the site level, and the scoping is the
+		# point: /mcp is a Server-Sent Event stream, and an encoder sitting in front of it
+		# buffers it into a lump - the same failure `flush_interval -1` exists to prevent
+		# on that handle. This handle serves only the SvelteKit app.
+		#
+		# Worth ~8.4x on this site's HTML (measured 2026-09-02): the pages are large and
+		# extremely repetitive - /zapstore/leaderboards alone carries 630 KB of class
+		# attributes across 13,442 elements. adapter-node is built with precompress:false,
+		# so nothing upstream is compressed and this is the only place it can happen.
+		# zstd first: Caddy picks by the client's Accept-Encoding, and every crawler and
+		# browser that does not announce zstd still gets gzip.
+		encode zstd gzip
+		reverse_proxy nostrology-web:3000
+	}
+}
+
+# --- Nectar dataset blob store -----------------------------------------------------
+# blossom.nostrolo.gy serves the content-addressed Parquet blobs referenced by
+# kind-30800 (Nectar dataset manifests) events. Read-only + range-served. The bucket
+# ($NECTAR_BUCKET) is PRIVATE - Caddy proxies to the `nectar-sigv4` sidecar over this
+# compose's bridge (NEVER a host port), which SigV4-signs each request with the box
+# instance-role creds (IMDS) and forwards to S3. So blossom is the ONLY public read path
+# and the bucket never goes public - same "Caddy is the one door" ethos as the app vhost.
+# GET/HEAD of a BLOB only; anything else 405s at the edge (S3 never sees a write
+# attempt) - with one exception Caddy cannot own: `OPTIONS *` is intercepted by Go's
+# globalOptionsHandler before routing and returns a bare 200 with none of this
+# block's headers. Nothing reaches S3, so it is a documentation caveat, not a hole.
+#
+# WHAT "the bucket never goes public" DID AND DID NOT COVER, corrected 2026-09-23. It
+# was true of the object grants and still is. It was never true of the PROXY: the
+# sidecar signed whatever path arrived, so until this date an anonymous caller could
+# get a full ListBucketResult from `GET /`, and - worse - an escaped path the sidecar
+# canonicalised differently made S3 return a SignatureDoesNotMatch body echoing the
+# instance role's live x-amz-security-token. Both are closed by the @blob ALLOWLIST
+# below, which is now the only thing that reaches the signer; read that note before
+# changing anything here.
+# Range/If-None-Match pass through untouched (DuckDB footer-first reads over HTTP).
+blossom.nostrolo.gy {
+	# Access log -> (log-filter) -> stdout (JSON) -> the log shipper -> Loki. See the access-logging
+	# note above.
+	# NB when reading this stream: DuckDB reads remote Parquet footer-first with HTTP
+	# Range requests, so ONE analytical query becomes SEVERAL log lines. Line count here
+	# is request count, NOT visitor or query count. Caddy logs the CLIENT request, so the
+	# nectar-sigv4 sidecar's AWS credentials never appear (signing happens downstream of
+	# this log). That stays true only while blossom proxies via the sidecar - switching to
+	# presigned S3 URLs would put X-Amz-Signature in the logged `uri`.
+	log access_blossom {
+		output stdout
+		format filter {
+			import log-filter
+			wrap json
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=86400"
+		X-Content-Type-Options "nosniff"
+		# DENY here too, so "every site block sets both" stays a rule with no exceptions.
+		# It is not decorative on a blob store: without it any page can frame a blob, and
+		# a blob is attacker-supplied content served from our own origin.
+		X-Frame-Options "DENY"
+		# Do not advertise the backend. S3 answers a blob with `Server: AmazonS3` plus
+		# x-amz-request-id / x-amz-id-2 / x-amz-server-side-encryption, and a HEAD of the
+		# root used to add x-amz-bucket-arn. No Blossom server emits any of that, so under
+		# "reveal no more than a regular Blossom server would" they are out of scope.
+		# DELETIONS, not overwrites: inventing a plausible `Server` value would be a
+		# different lie, and the point is to say nothing rather than to say something else.
+		-Server
+		-X-Amz-*
+	}
+
+	# MUST precede the @ro handle: `handle` blocks are mutually exclusive and evaluated in
+	# source order, so this claims scanner probes before @ro can proxy them to the signer.
+	# Without it a GET /xmlrpc.php here is SigV4-signed and costs a full S3 round-trip to
+	# come back NoSuchKey. (Observed probes all arrived over plain HTTP and were 308'd by
+	# the auto-HTTPS redirect before reaching this block - this closes the HTTPS path.)
+	import junk-filter
+
+	# ALLOWLIST: only a blob-shaped path is ever signed. Everything else 404s here.
+	#
+	# This is deny-by-default on purpose, and the first attempt at this fix (2026-09-23)
+	# was a DENY matcher - `path /` -> 404 - which review proved insufficient. Two
+	# things defeat a deny list here, both verified against a real Caddy and against the
+	# live host:
+	#
+	#  1. A PATHLESS request line. `GET https://blossom.nostrolo.gy HTTP/1.1` in absolute
+	#     form parses to URL.Path == "", which no `path` matcher matches (`path /` and
+	#     `path_regexp ^/?$` were both measured to let it through). Go's
+	#     URL.RequestURI() then restores "/" on the upstream leg, so S3 sees a bucket
+	#     GET and answers with the full ListBucketResult. HTTP/2 forbids an empty
+	#     :path, but a client that declines ALPN gets HTTP/1.1 and can send this.
+	#  2. Caddy MATCHES the cleaned, unescaped path but `reverse_proxy` FORWARDS the raw
+	#     URI. So `/%62<62 more hex>` unescapes to a valid-looking blob for the matcher
+	#     while the signer sees the escaped form - a mismatch that made S3 return a
+	#     SignatureDoesNotMatch body echoing the whole canonical request, INCLUDING the
+	#     instance role's live x-amz-security-token. That was a far larger disclosure
+	#     than the listing this change started out to fix. The `rewrite` below closes
+	#     the asymmetry by forwarding the matched, normalised path and nothing else.
+	#
+	# Neither is reachable once the only thing proxied is a path that MATCHES 64 hex
+	# characters with an optional extension. An unmatched GET/HEAD - pathless, root,
+	# `/list/<pubkey>`, `/upload`, an escaped near-miss - falls to the 404 below without
+	# an S3 round trip.
+	#
+	# WHY 404 AND NOT A LANDING PAGE. Most real Blossom servers answer 200 at `/`
+	# (surveyed 2026-09-23: 19 of 26 reachable public hosts, and the reference
+	# implementation hzrd149/blossom-server ships a landing page enabled by default), so
+	# a 404 is the less common choice - but it reveals strictly less, and nothing here
+	# has a landing page to serve. What the BUDs settle is narrower and is the actual
+	# load-bearing fact: across BUD-00..12 there is NO whole-store enumeration endpoint,
+	# so a ListBucketResult was never a Blossom surface in the first place.
+	@blob {
+		method GET HEAD
+		path_regexp ^/[0-9a-f]{64}(\.[A-Za-z0-9._-]+)?$
+	}
+	handle @blob {
+		# Forward the MATCHED path and nothing else. Drops the query, so an S3
+		# subresource (`?acl`, `?versions`, `?uploads`) can never be smuggled onto a
+		# real blob - `?acl` returned an AccessDenied body carrying the role ARN - and
+		# normalises the escaping so the signer sees exactly what the matcher tested.
+		# Safe precisely because @blob has already constrained the path to 64 hex plus
+		# an optional extension: there is nothing left for {path} to alter. Range and
+		# If-None-Match are HEADERS and pass through untouched (DuckDB footer-first).
+		# The TRAILING `?` is load-bearing: Caddy's rewrite PRESERVES the original query
+		# when the target has none, so a bare `{path}` left `?acl` attached (caught by
+		# the harness, not by reading). `{path}?` clears it.
+		rewrite * {path}?
+		reverse_proxy nectar-sigv4:8080
+	}
+
+	# Any other GET/HEAD: not a blob, so not found. Answered at the edge, never signed.
+	@ro method GET HEAD
+	handle @ro {
+		respond 404
+	}
+
+	# Read-only store: reject writes/other methods at the edge, never proxied to the signer.
+	handle {
+		respond 405
+	}
+}
+
+# --- Alias hosts: dev + www -> the apex -------------------------------------------------
+# dev.nostrolo.gy served the site until 2026-09-22 and its links are out in the world,
+# some inside immutable Nostr notes; www is what people type. Both resolve to this host,
+# so Caddy keeps their certs, and every request is sent to the SAME PATH AND QUERY on the
+# apex. One content host: serving pages under www too would be accidental dual-serving.
+#
+# THE LITERAL `308`, NEVER `permanent`. Caddy's `redir ... permanent` emits 301, and
+# clients rewrite a POST to a GET on a 301 (httpx does, and so do browsers) - which would
+# break every MCP client still configured with https://dev.nostrolo.gy/mcp, because
+# JSON-RPC over MCP is a POST. A 308 keeps the method and the body. The installed Python
+# MCP SDK (2.0.0) follows a cross-origin 308 with the body, the query and Mcp-Session-Id
+# intact (verified 2026-09-20). Browsers treat 308 like 301 for GET.
+#
+# `Cache-Control: no-store` ON THE REDIRECT. RFC 9110 15.4.9: a 308 is "heuristically
+# cacheable" unless explicit cache controls say otherwise, so without this a browser may
+# keep the redirect and never ask dev.nostrolo.gy again. no-store keeps the option of
+# pointing dev.nostrolo.gy at something else later (a real dev environment), and makes a
+# rollback take effect on the next request. Search engines still read a 308 as a
+# permanent move and consolidate on the apex; caching the redirect is not what they use.
+#
+# HSTS stays at 1 day here, not the apex's year, for the same reason: nothing should pin
+# the alias names for long.
+#
+# Search engines: `dev.nostrolo.gy/robots.txt` is redirected like everything else, so a
+# crawler reads the apex's robots.txt. RFC 9309 2.3.1.2: crawlers SHOULD follow at least
+# five consecutive redirects for robots.txt, even across hosts; Google does.
+dev.nostrolo.gy, www.nostrolo.gy {
+	# Access log -> (log-filter) -> stdout (JSON) -> the log shipper -> Loki. See the access-logging
+	# note above.
+	# Every line here is a hop, not a served request: the client that follows it shows up
+	# again under access_site. Count requests from access_site; read this stream to see
+	# who still uses the old names (which MCP clients, which Nostr notes' links). Both
+	# hostnames share one logger; split them on request.host.
+	log access_alias {
+		output stdout
+		format filter {
+			import log-filter
+			wrap json
+		}
+	}
+
+	# No backend to protect here (this block only redirects), but kept so the invariant
+	# stays uniform across every site block, and so a scanner probing an alias is answered
+	# here instead of being bounced into the apex for a second round-trip.
+	import junk-filter
+
+	header {
+		Strict-Transport-Security "max-age=86400"
+		Cache-Control "no-store"
+		# Same two the content host sets. There is nothing here to sniff or frame - a
+		# 308 with an empty body, or the junk filter's 404 - so these buy little on
+		# their own. They are set anyway so that "every site block carries them" is a
+		# rule with no exceptions to remember: the next person to add a body to a block
+		# (an error page, a stub) inherits them instead of rediscovering the omission.
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	# The 308 must carry it too, or a card for an old dev.nostrolo.gy link fails at the
+	# redirect; see (link-preview-cors) above.
+	import link-preview-cors
+
+	# The redirect is wrapped in `handle` ON PURPOSE. A bare `redir` is sorted by Caddy's
+	# built-in DIRECTIVE ORDER, which places `redir` ahead of `handle` - so an unwrapped
+	# redir would fire before the imported `handle @junk` and redirect the junk instead of
+	# 404ing it. Wrapping makes both `handle` blocks, which are mutually exclusive and
+	# evaluated in SOURCE order, so the filter above genuinely wins. `{uri}` is the path
+	# plus the query, exactly as the client sent them.
+	handle {
+		redir https://nostrolo.gy{uri} 308
+	}
+}
