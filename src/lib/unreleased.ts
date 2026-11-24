@@ -5,10 +5,11 @@
 // either finds the other.
 //
 // A part of the site can be built, deployed and live while only the OPERATOR'S OWN
-// logged-in session sees it. The first one is /marketplaces' Recent listings section (the
+// logged-in session sees it. The first one was /marketplaces' Recent listings section (the
 // operator's call, 2026-10-24: "I want this section only visible to the logged in user
 // WhisperHash... To any other visitor, including a logged in one, the new section should
-// not ever be visible").
+// not ever be visible"), until the operator's call of 2026-11-24 released it to every reader
+// and kept this gate for the next one.
 //
 // THIS IS NOT /wip. That page lists surfaces that are finished and merely unlinked, and
 // its own comment is honest about what that is: "obscurity, not true concealment" - anyone
@@ -26,7 +27,7 @@
 // see that one exists and what it would look like.
 //
 // AND ONE THING MORE A VISITOR CAN NOTICE, which the first version of this comment denied:
-// `/marketplaces#recent-listings` is not inert for them. $lib/legacy-hash resolves an old `#`
+// `/<domain>#<that slug>` is not inert for them. $lib/legacy-hash resolves an old `#`
 // link against the WHOLE table, so the hash opens the section's pill and then navigates to the
 // address, which 302s (found) to the domain with the generic note - while an unknown hash does
 // nothing at all. That tells them the domain knows the word, which is inside the boundary
@@ -126,7 +127,7 @@ export function seesSection(t: SlugTable, slug: string, session: Viewer): boolea
  * condition inside each of those rules.
  *
  * It filters on the `unreleased` flag, and on nothing else: a table with no flag anywhere comes
- * back as the identical object (every domain but one, today), so a caller that passes `sees`
+ * back as the identical object (the usual case), so a caller that passes `sees`
  * through on every request is not paying for a copy per request.
  *
  * A `former` slug that points at a hidden one goes too: it would otherwise 308 (permanent

@@ -10,8 +10,9 @@
 //   node scripts/verify-section-link.mjs http://127.0.0.1:3000 # a local `node build`
 //
 // WIRE (Node's fetch, redirects not followed):
-//   - each public section in SECTIONS (/git/zaps, /marketplaces/categories) and its domain: 200
-//     (ok), HTML; the section with its own og:title and og:description, an absolute og:image,
+//   - each public section in SECTIONS (/git/zaps, /marketplaces/categories,
+//     /marketplaces/recent-listings) and its domain: 200 (ok), HTML; the section with its own
+//     og:title and og:description, an absolute og:image,
 //     og:url naming itself, all in the first 8 KB, and sent on its pill with its card;
 //   - on /git, /marketplaces, /routstr, /zapstore and /nutzaps: the pill bar in the server's HTML,
 //     a plain link per pill, never preloaded, and every pill's address it links answering 200 (ok)
@@ -97,7 +98,8 @@ const DOMAINS = [
  * `word`: what its own preview must be about. */
 const SECTIONS = [
 	{ path: '/git/zaps', domain: '/git', pill: 'collaboration', pillName: 'Collaboration', id: 'ngit-zaps', name: 'Zaps', word: /zap/i },
-	{ path: '/marketplaces/categories', domain: '/marketplaces', pill: 'catalogue', pillName: "What's for sale", id: 'markets-categories', name: 'Categories', word: /categor/i }
+	{ path: '/marketplaces/categories', domain: '/marketplaces', pill: 'catalogue', pillName: "What's for sale", id: 'markets-categories', name: 'Categories', word: /categor/i },
+	{ path: '/marketplaces/recent-listings', domain: '/marketplaces', pill: 'catalogue', pillName: "What's for sale", id: 'markets-recent-listings', name: 'Recent listings', word: /listing/i }
 ];
 const domainOf = (sec) => DOMAINS.find((d) => d.path === sec.domain);
 

@@ -1,7 +1,30 @@
 // A small, hand-written marketplaces snapshot document (the data of one marketplaces_snapshot
 // row) for the /marketplaces page tests: every field of MarketsSnapshot, one to three rows per
 // list, numbers chosen to be recognisable in rendered text rather than to reproduce any run.
-import type { MarketsSnapshot } from '$lib/shared/data-types';
+import type { MarketsRecentListing, MarketsSnapshot } from '$lib/shared/data-types';
+
+/** One Recent listings row as the server sends it: a listing a marketplace can open, so it
+ *  survives the server's cut ($lib/markets/recent) and is drawn. */
+export const LISTING: MarketsRecentListing = {
+	pubkey: '2e7afe3f9af8c3dc90d6e8acaf5d7aa926a54f0c22f1c555707309c059fe831b',
+	d_tag: 'barattolo-3195',
+	event_id: null,
+	effective_ts: 1792686600,
+	title: 'Buono Amazon 25 scontato',
+	status: 'active',
+	client: '',
+	location: 'Italia',
+	cc: 'IT',
+	categories: [],
+	price: ['price', '23.50', 'EUR'],
+	seller_name: null,
+	market_image: null,
+	expires_at: null,
+	title_tag: null,
+	visibility: '',
+	content_warning: null,
+	summary_len: null
+};
 
 export const SNAPSHOT: MarketsSnapshot = {
 	generated_utc: '2026-08-23 09:43:05Z',

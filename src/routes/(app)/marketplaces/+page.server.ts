@@ -8,9 +8,9 @@ import { seesUnreleased, visibleTable } from '$lib/unreleased';
 // on the server, and nowhere else. The snapshot is the layout's (+layout.server.ts).
 //
 // `visibleTable` is what keeps a section still in development out of the answer: for anyone
-// but the operator, /marketplaces/recent-listings is not a slug this domain has, so it gets
-// the 302 (found) and the generic note that any unknown word gets - no page title of its own
-// and no link preview naming it ($lib/unreleased).
+// but the operator, its address is not a slug this domain has, so it gets the 302 (found) and
+// the generic note that any unknown word gets - no page title of its own and no link preview
+// naming it ($lib/unreleased).
 export const load: PageServerLoad = ({ url, setHeaders, locals }) => ({
 	target: answerAddress(
 		visibleTable(MARKETPLACES_SLUGS, seesUnreleased(locals.session)),

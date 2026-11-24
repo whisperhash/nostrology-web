@@ -5,7 +5,7 @@
 //   node scripts/verify-unreleased.mjs                        # https://nostrolo.gy
 //   node scripts/verify-unreleased.mjs http://127.0.0.1:3000  # a local `node build`
 //
-// WHAT IT CHECKS, as a stranger, for every entry in HIDDEN below:
+// WHAT IT CHECKS, as a stranger, for every entry in HIDDEN (scripts/lib/unreleased.mjs):
 //   - its ADDRESS answers 302 (found) to the domain with the `#gone` note, uncached, exactly as
 //     a word nobody has ever used does - not 200 (ok), and not 404 (not found), which the slug
 //     rules forbid ($lib/slug-table);
@@ -24,9 +24,14 @@
 // the deployed page sees the whole of what a stranger is sent, whichever component drew it.
 //
 // HIDDEN IS HAND-KEPT, like verify-section-link.mjs's DOMAINS: these scripts are plain Node and
-// do not import the app's TypeScript. src/lib/unreleased.test.ts reads this file and fails if
-// the list and the slug tables disagree, so the drift is caught in the suite rather than by a
-// check that silently examines nothing.
+// do not import the app's TypeScript. It lives in scripts/lib/unreleased.mjs, which
+// verify-login.mjs reads too, and src/lib/unreleased.test.ts reads it and fails if the list and
+// the slug tables disagree, so the drift is caught in the suite rather than by a check that
+// silently examines nothing.
+//
+// WHEN NOTHING IS IN DEVELOPMENT, HIDDEN is empty, and this says so and exits 0 without a
+// request: there is nothing for a stranger to be kept from. It never prints ALL CHECKS PASSED
+// having checked nothing.
 //
 // FIRST-PARTY MARKING. Every request carries the User-Agent `nozzl-verify-unreleased`, so its
 // lines can be told apart in the access log. NO operator marker cookie, deliberately: this
@@ -34,31 +39,7 @@
 //
 // Exits 0 only if every check passes, 1 if any fails, 2 on a usage error.
 
-/** Every slug a slug table marks `unreleased`, with what the page would show if it leaked. */
-const HIDDEN = [
-	{
-		domain: '/marketplaces',
-		address: '/marketplaces/recent-listings',
-		/** The pill it sits on, whose panel is where the card would be drawn. */
-		pill: '/marketplaces/catalogue',
-		needles: [
-			'markets-recent-listings',
-			'Recent listings',
-			'/marketplaces/recent-listings',
-			'Nostr marketplaces: the newest listings',
-			// the outbound links, QUALIFIED BY PATH rather than by host: a `client` tag is a
-			// seller-chosen string and the Clients chart on this very pill draws it, so a bare
-			// `shopstr.market` would match a listing published by an app that named itself after
-			// a host (the live pool already has `bitpopart.com` there). A check that cries wolf
-			// is a check nobody reads.
-			'shopstr.market/listing/',
-			'shopstr.market/marketplace/',
-			'shop.conduit.market/products/',
-			'plebeian.market/products/',
-			'plebeian.market/profile/'
-		]
-	}
-];
+import { HIDDEN } from './lib/unreleased.mjs';
 
 const args = process.argv.slice(2);
 const base = (args.find((a) => !a.startsWith('--')) ?? 'https://nostrolo.gy').replace(/\/+$/, '');
@@ -84,6 +65,10 @@ const get = async (path, redirect = 'manual') => {
 	};
 };
 
+if (HIDDEN.length === 0) {
+	console.log(`${base}: nothing is in development (scripts/lib/unreleased.mjs): no address to check`);
+	process.exit(0);
+}
 console.log(`${base}: ${HIDDEN.length} slug(s) still in development`);
 const sitemap = await get('/sitemap.xml', 'follow');
 

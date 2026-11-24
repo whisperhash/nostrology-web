@@ -40,11 +40,6 @@ export const MARKETPLACES_SLUGS: SlugTable = {
 			pill: 'catalogue',
 			elementId: 'markets-recent-listings',
 			title: 'Recent listings',
-			// STILL IN DEVELOPMENT (the operator's call, 2026-10-24): only the operator's own
-			// logged-in session sees this section, its rows or this address - everyone else gets
-			// the answer an unknown slug gets. $lib/unreleased has the rule and what it does not
-			// hide; the page's +layout.server.ts reads no listings for anyone else at all.
-			unreleased: true,
 			preview: {
 				title: 'Nostr marketplaces: the newest listings',
 				description:

@@ -127,9 +127,10 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-// The two sections with a card and an icon of their own, each rendered as the reader it is for
-// gets it. Categories is drawn from the snapshot, so with no `recent` at all, which is what
-// everyone but the operator is sent (+layout.server.ts); Recent listings exists only with rows.
+// The two sections with a card and an icon of their own, each rendered with the least it needs.
+// Categories is drawn from the snapshot, so with no `recent` at all, which is what a reader is
+// sent while Recent listings is in development (+layout.server.ts); Recent listings exists only
+// with rows.
 describe.each([
 	{ slug: 'categories', address: '/marketplaces/categories', recent: undefined },
 	{ slug: 'recent-listings', address: '/marketplaces/recent-listings', recent: ROWS }
@@ -417,7 +418,7 @@ describe('the grid Categories sits in', () => {
 });
 
 // As /git's git-section-links.test.ts asks of its table: a section added to this one with no card
-// or no icon fails here. Rendered as the operator sees it, because every section has to be drawn.
+// or no icon fails here. Rendered with every section's data, because every section has to be drawn.
 describe("every section in /marketplaces's slug table", () => {
 	beforeEach(() => {
 		current.url = new URL('https://site.test/marketplaces');
@@ -453,8 +454,8 @@ describe("every section in /marketplaces's slug table", () => {
 	});
 });
 
-// What's for sale is the one pill on the site with two such sections, as the operator sees it, so
-// it is the one place P1's "one card at a time" is more than a card being on or off screen.
+// What's for sale is the one pill on the site with two such sections, so it is the one place
+// P1's "one card at a time" is more than a card being on or off screen.
 describe('the link icon on a phone, with two sections with an address on one pill', () => {
 	const CATALOGUE: Target = { kind: 'page', pill: 'catalogue' };
 	const headingsAt = (tops: { categories: number; 'recent-listings': number }) =>

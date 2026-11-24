@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { NAV_ITEMS } from '$lib/nav';
 import { slugAddresses, type SlugTable } from '$lib/slug-table';
 import { SLUG_TABLES } from '$lib/slug-tables';
-import { MARKETPLACES_SLUGS } from '$lib/slug-tables/marketplaces';
 import { visibleTable } from '$lib/unreleased';
 import {
 	appPath,
@@ -188,7 +187,8 @@ describe('slug table addresses', () => {
 		const paths = sitemapPaths(INPUTS);
 		for (const p of ['/git/repositories', '/git/hosting', '/git/maintainers', '/git/collaboration', '/git/zaps', '/git/methodology'])
 			expect(paths).toContain(p);
-		for (const p of ['/marketplaces/growth', '/marketplaces/catalogue', '/marketplaces/geography', '/marketplaces/shipping', '/marketplaces/categories', '/marketplaces/methodology'])
+		// Recent listings since the operator's call of 2026-11-24 released it
+		for (const p of ['/marketplaces/growth', '/marketplaces/catalogue', '/marketplaces/geography', '/marketplaces/shipping', '/marketplaces/categories', '/marketplaces/recent-listings', '/marketplaces/methodology'])
 			expect(paths).toContain(p);
 		// pills built as pages of their own, listed from their slug tables
 		for (const p of ['/zapstore/leaderboards', '/nutzaps/mints']) expect(paths).toContain(p);
@@ -196,14 +196,17 @@ describe('slug table addresses', () => {
 	});
 
 	it('leaves out a section still in development, wherever the slug table puts one', () => {
-		const paths = sitemapPaths(INPUTS);
-		// Recent listings today (the operator's call, 2026-10-24): the address answers a
-		// visitor with a 302 (found) to the domain, so listing it would put a redirect in the
-		// sitemap and tell every crawler that something is there.
-		expect(MARKETPLACES_SLUGS.sections['recent-listings'].unreleased).toBe(true);
-		expect(paths).not.toContain('/marketplaces/recent-listings');
+		// Its address answers a visitor with a 302 (found) to the domain, so listing it would put
+		// a redirect in the sitemap and tell every crawler that something is there. A fixture
+		// table carries one, so this holds whatever the real tables do.
+		const inDevelopment: SlugTable = {
+			...SHOP,
+			sections: { ...SHOP.sections, returns: { pill: 'deals', elementId: 'shop-returns', title: 'Returns', unreleased: true } }
+		};
+		expect(slugTablePaths({ shop: inDevelopment })).toEqual(['/shop/deals', '/shop/prices']);
+		expect(sitemapPaths({ ...INPUTS, slugTables: { shop: inDevelopment } })).not.toContain('/shop/returns');
 		// and it is in the operator's view of the same table, so this is the gate and not a typo
-		expect(slugAddresses(MARKETPLACES_SLUGS)).toContain('/marketplaces/recent-listings');
+		expect(slugAddresses(inDevelopment)).toContain('/shop/returns');
 		// the pill shape is not supported and slugTableProblems refuses it; that it would be
 		// filtered here too is pinned in src/lib/unreleased.test.ts
 	});

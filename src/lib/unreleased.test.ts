@@ -10,23 +10,21 @@ import {
 	resolveSlug,
 	slugAddresses,
 	slugTableProblems,
+	type SectionEntry,
 	type SlugTable
 } from './slug-table';
 import { MARKETPLACES_SLUGS } from './slug-tables/marketplaces';
 import { SLUG_TABLES } from './slug-tables';
-import { MARKETPLACES } from './markets/links';
+import { HIDDEN } from '../../scripts/lib/unreleased.mjs';
 
 // What is still in development is visible to the operator's own session and to NOBODY else -
 // not to an anonymous visitor and not to another logged-in one (the operator's call,
 // 2026-10-24). This file pins the decision and the table filter; the two places the filter is
-// applied are pinned in src/routes/(app)/domain-loads.test.ts (the loads) and
-// src/lib/seo/sitemap.test.ts (the sitemap).
+// applied are pinned in src/routes/(app)/domain-loads.gating.test.ts (the loads) and
+// src/lib/seo/sitemap.test.ts (the sitemap). All three run on fixtures - the tables here, a flag
+// and a table there - so they hold whatever the real tables do.
 
 const OTHER = 'f'.repeat(64);
-
-// A seller and an event, for building the outbound links the leak check greps for.
-const PK = '2e7afe3f9af8c3dc90d6e8acaf5d7aa926a54f0c22f1c555707309c059fe831b';
-const ID = '49a1d8111ed72770793c7a5756c43a65ac833654c4a0aba14b1707e104428194';
 
 const SHOP: SlugTable = {
 	path: '/shop',
@@ -117,14 +115,6 @@ describe('whether a reader gets one section, data and all', () => {
 		expect(seesSection(SHOP, 'no-such-thing', null)).toBe(true);
 		expect(seesSection(SHOP, 'constructor', null)).toBe(true);
 	});
-
-	it('is what /marketplaces hangs its listing read on', () => {
-		expect(seesSection(MARKETPLACES_SLUGS, 'recent-listings', null)).toBe(false);
-		expect(seesSection(MARKETPLACES_SLUGS, 'recent-listings', { pubkey: OPERATOR_PUBKEY })).toBe(
-			true
-		);
-		expect(seesSection(MARKETPLACES_SLUGS, 'methodology', null)).toBe(true);
-	});
 });
 
 describe('the table a reader sees', () => {
@@ -210,65 +200,52 @@ describe('the table a reader sees', () => {
 	});
 });
 
-describe('the live check and the tables agree', () => {
-	// scripts/verify-unreleased.mjs is plain Node and hand-keeps its list, like
-	// verify-section-link.mjs's DOMAINS. A list that drifts is worse than no list: the script
-	// would pass while examining nothing, which is the failure mode of every "check" that
-	// enumerates its own subject. So the drift fails here instead.
-	const script = readFileSync('scripts/verify-unreleased.mjs', 'utf8');
+describe('the live checks and the tables agree', () => {
+	// scripts/lib/unreleased.mjs hand-keeps, in plain Node, the list the live checks walk as a
+	// stranger (verify-unreleased.mjs and verify-login.mjs), like verify-section-link.mjs's
+	// DOMAINS. A list that drifts is worse than no list: the checks would pass while examining
+	// nothing, which is the failure mode of every "check" that enumerates its own subject. So the
+	// drift fails here instead.
+	/** An address a table has in development, with its table and its section's entry (a pill has
+	 *  none). */
+	type InDevelopment = { address: string; t: SlugTable; sec?: SectionEntry };
+	const inTables = Object.values(SLUG_TABLES)
+		.flatMap((t): InDevelopment[] => [
+			...Object.entries(t.sections)
+				.filter(([, sec]) => sec.unreleased === true)
+				.map(([slug, sec]) => ({ address: addressOf(t, slug), t, sec })),
+			...t.pills.filter((p) => p.unreleased === true).map((p) => ({ address: addressOf(t, p.slug), t }))
+		])
+		.sort((a, b) => a.address.localeCompare(b.address));
 
-	it('names every address a slug table still has in development, and no other', () => {
-		const inScript = [...script.matchAll(/^\t\taddress: '([^']+)'/gm)].map((m) => m[1]).sort();
-		const inTables = Object.entries(SLUG_TABLES)
-			.flatMap(([, t]) =>
-				Object.entries(t.sections)
-					.filter(([, sec]) => sec.unreleased === true)
-					.map(([slug]) => addressOf(t, slug))
-					.concat(t.pills.filter((p) => p.unreleased === true).map((p) => addressOf(t, p.slug)))
-			)
-			.sort();
-		expect(inScript).toEqual(inTables);
-		expect(inTables.length).toBeGreaterThan(0);
+	it('names every address a slug table has in development, and no other', () => {
+		// The day a table marks one, this fails until the list has it.
+		expect(HIDDEN.map((h) => h.address).sort()).toEqual(inTables.map((x) => x.address));
 	});
 
-	it('looks for the strings the page would actually leak', () => {
-		// The element id, the heading and the preview title are what a leak would carry; if one
-		// is renamed in the table and not in the script, the check goes looking for the old one
-		// and finds nothing, which reads as a pass.
-		const entry = MARKETPLACES_SLUGS.sections['recent-listings'];
-		for (const needle of [entry.elementId, entry.title, entry.preview!.title]) {
-			expect(script, needle).toContain(needle);
+	it('is the list both live checks import', () => {
+		// A list the scripts stopped importing would agree with the tables while checking nothing.
+		// This reads their text, so it cannot see what they do with the list once imported.
+		for (const script of ['scripts/verify-unreleased.mjs', 'scripts/verify-login.mjs']) {
+			const text = readFileSync(script, 'utf8');
+			expect(text, script).toMatch(/^import \{ HIDDEN \} from '\.\/lib\/unreleased\.mjs';$/m);
+			expect(text, script).not.toMatch(/\b(?:const|let|var)\s+HIDDEN\b/);
 		}
 	});
 
-	it('qualifies the outbound-link needles by path, against the real link builders', () => {
-		// A BARE HOST is not a usable needle. A `client` tag is a seller-chosen string and the
-		// Clients chart on this very pill draws it, so `shopstr.market` alone matched a page with
-		// no leak in it - the live pool already carries `bitpopart.com` there, and a check that
-		// cries wolf is a check nobody reads. These needles are hand-kept in plain Node, so what
-		// they must stay is derived HERE from the builders themselves rather than copied.
-		const row = { pubkey: PK, d_tag: 'x', event_id: ID, market_image: true };
-
-		for (const m of MARKETPLACES) {
-			// The listing link is the one EVERY drawn row carries, so matching it is what makes a
-			// leak catchable at all.
-			const url = m.url(row);
-			expect(url, m.key).not.toBeNull();
-			const { host, pathname } = new URL(url!);
-			const qualified = host + '/' + pathname.split('/')[1] + '/';
-			expect(script, `${m.key} listing: ${qualified}`).toContain(qualified);
-			expect(script, `${m.key}: the bare host is back`).not.toContain(`'${host}'`);
-		}
-
-		for (const m of MARKETPLACES) {
-			const seller = m.sellerUrl(PK);
-			if (!seller) continue;
-			const { host, pathname } = new URL(seller);
-			const segment = pathname.split('/')[1];
-			// Conduit addresses a seller at `/<npub>`, which has no path segment to qualify on -
-			// and needs none, since no row draws a seller link without its listing link above.
-			if (segment.startsWith('npub1')) continue;
-			expect(script, `${m.key} seller: ${host}/${segment}/`).toContain(host + '/' + segment + '/');
+	it('holds each entry to its own section: its domain, its pill and the strings it would leak', () => {
+		// The element id, the heading, the address and the preview title are what a leak would
+		// carry; if one is renamed in the table and not in the list, the check goes looking for the
+		// old one and finds nothing, which reads as a pass. Checked against each entry's own
+		// needles, so a string elsewhere in the file counts for nothing.
+		for (const { address, t, sec } of inTables) {
+			const entry = HIDDEN.find((h) => h.address === address)!;
+			expect(entry.domain, address).toBe(t.path);
+			if (!sec) continue;
+			expect(entry.pill, address).toBe(addressOf(t, sec.pill));
+			for (const needle of [sec.elementId, sec.title, address, sec.preview?.title]) {
+				if (needle !== undefined) expect(entry.needles, `${address}: ${needle}`).toContain(needle);
+			}
 		}
 	});
 });
@@ -310,28 +287,5 @@ describe("the section check's list and the tables agree", () => {
 	it('walks only domains it knows the title of, since a section is landed on under its domain', () => {
 		const domains = [...script.matchAll(/^\t\{ path: '([^']+)', title: /gm)].map((m) => m[1]);
 		for (const { domain } of inScript) expect(domains, domain).toContain(domain);
-	});
-});
-
-describe('/marketplaces, the one domain with a section in development today', () => {
-	it('hides Recent listings, and only that', () => {
-		const hidden = Object.entries(MARKETPLACES_SLUGS.sections)
-			.filter(([, s]) => s.unreleased)
-			.map(([slug]) => slug);
-		expect(hidden).toEqual(['recent-listings']);
-		expect(MARKETPLACES_SLUGS.pills.some((p) => p.unreleased)).toBe(false);
-	});
-
-	it('keeps every other address of the page for everyone', () => {
-		const seen = visibleTable(MARKETPLACES_SLUGS, false);
-		expect(slugAddresses(seen)).toEqual([
-			'/marketplaces/growth',
-			'/marketplaces/catalogue',
-			'/marketplaces/geography',
-			'/marketplaces/shipping',
-			'/marketplaces/categories',
-			'/marketplaces/methodology'
-		]);
-		expect(addressOf(MARKETPLACES_SLUGS, 'recent-listings')).toBe('/marketplaces/recent-listings');
 	});
 });

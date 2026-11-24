@@ -18,8 +18,9 @@
 //     body with NO declared length never gets a 200 (ok): a reset, or a 502 (bad gateway) from
 //     Caddy, are both right;
 //   - that logout clears the cookie with the attributes it was set with, and the marker too;
-//   - and, on nostrolo.gy only, that this stranger still cannot see what is in development
-//     (verify-unreleased.mjs is the full check of that).
+//   - and, on nostrolo.gy only, that this stranger cannot see what is in development: each
+//     address scripts/lib/unreleased.mjs lists, if any (verify-unreleased.mjs is the full check
+//     of that, as an anonymous stranger).
 // A local `node build` needs ORIGIN set to the base URL given here, and an AUTH_SESSION_SECRET
 // of at least 32 characters; the page check uses /wip, which reads no database.
 //
@@ -34,6 +35,7 @@
 
 import { createHash } from 'node:crypto';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { HIDDEN } from './lib/unreleased.mjs';
 
 const args = process.argv.slice(2);
 const base = (args.find((a) => !a.startsWith('--')) ?? 'https://nostrolo.gy').replace(/\/+$/, '');
@@ -186,15 +188,18 @@ if (value) {
 	check(page.status === 200, 'GET /wip with the cookie: 200 (ok)', `got ${page.status}`);
 	check(html.includes('auth-chip'), 'the server-rendered nav shows the session, not Log in');
 
-	if (LIVE) {
-		const hidden = await fetch(`${base}/marketplaces/recent-listings`, {
+	if (LIVE && HIDDEN.length === 0) {
+		console.log('  --    nothing is in development (scripts/lib/unreleased.mjs): no address to check');
+	}
+	for (const { domain, address } of LIVE ? HIDDEN : []) {
+		const hidden = await fetch(base + address, {
 			redirect: 'manual',
 			headers: { 'user-agent': MARK, cookie: `${COOKIE}=${value}` }
 		});
 		await hidden.arrayBuffer();
 		check(
-			hidden.status === 302 && hidden.headers.get('location') === '/marketplaces#gone',
-			'a logged-in stranger is still sent away from what is in development',
+			hidden.status === 302 && hidden.headers.get('location') === `${domain}#gone`,
+			`a logged-in stranger is sent away from ${address}, which is in development`,
 			`got ${hidden.status} -> ${hidden.headers.get('location')}`
 		);
 	}

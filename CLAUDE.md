@@ -242,7 +242,9 @@ their own, a route each (/zapstore):
    pill bar `src/routes/(app)/pills-as-pages.test.ts` where each is a page of its own. The
    domain joins `DOMAINS` in `scripts/verify-section-link.mjs` (with `pages: true` where each
    pill is a page of its own) and, with a "What is counted", `PAGES` in
-   `scripts/verify-methodology-link.mjs`. The other tests read the slug tables and need nothing.
+   `scripts/verify-methodology-link.mjs`. Once its page answers a slug's address, its loads join
+   `DOMAINS` in `src/routes/(app)/domain-loads.gating.test.ts` too, which fails until they do.
+   The other tests read the slug tables and need nothing.
 
 - **Terms:** a *domain* (/git) is a subject area with its own page and nav entry. A *pill* is
   one of the switches along the top of its page and the part of the page it shows, named by
@@ -387,17 +389,20 @@ both ways. A test that clicks a pill stands the router in with
   focus kept, the scroll kept on /git at a desktop width and each new page at its top on
   /zapstore and /nutzaps, no preload on hovering a pill or the nav's link to the domain), Back
   and Forward, an old `#` link, the note, and for each section in its hand-kept `SECTIONS`
-  (/git/zaps, /marketplaces/categories): the landing, also on a 360 px phone, with the card held
-  inside its parent, the nav's link back to its domain, and the icon (a real hover and the real
-  clipboard on the desktop; on the phone a real tap, with the share menu stood in for);
+  (/git/zaps, /marketplaces/categories, /marketplaces/recent-listings): the landing, also on a
+  360 px phone, with the card held inside its parent, the nav's link back to its domain, and the
+  icon (a real hover and the real clipboard on the desktop; on the phone a real tap, with the
+  share menu stood in for);
 - `node scripts/verify-sitemap.mjs` - every listed URL answers 200 (ok) at once and names
   itself (the detail pages by a random sample, `--sample=<n>`), and every address a domain page
   links as its own is listed;
 - `node scripts/verify-unreleased.mjs` - as a STRANGER (no operator cookie): every address a
   slug table still marks `unreleased` answers 302 (found) to its domain uncached, the domain's
-  page and the section's pill carry no trace of it, and the sitemap does not list it. Its list
-  is hand-kept and `src/lib/unreleased.test.ts` fails if it drifts from the tables, because a
-  check that enumerates its own subject can pass while examining nothing;
+  page and the section's pill carry no trace of it, and the sitemap does not list it. Its list,
+  `scripts/lib/unreleased.mjs`, is hand-kept (`verify-login.mjs` walks it too, as a logged-in
+  stranger), and `src/lib/unreleased.test.ts` fails if it drifts from the tables, because a
+  check that enumerates its own subject can pass while examining nothing. With nothing in
+  development the list is empty, and the script says so and checks nothing;
 - `node scripts/verify-methodology-link.mjs https://nostrolo.gy`.
 
 What only a person can check, after a deploy that touches an icon: on an iPhone, a tap opens
@@ -467,11 +472,16 @@ pill and then bounces off the address - while an unknown hash does nothing. Same
 constant, compared against the pubkey in the HMAC-verified session cookie - the one identity on
 a request a client cannot assert (next section). A fork changes it to its own key.
 
-Tests: `src/lib/unreleased.test.ts` (the decision and the filter),
-`src/routes/(app)/domain-loads.test.ts` (both loads, for a visitor, another logged-in npub and
-the operator), `src/lib/seo/sitemap.test.ts` + `indexability.test.ts` (out of the sitemap, and
-a redirect rather than a page), and the domain page's own SSR test (no card, no heading, no row,
-no address in the HTML when the server sent no rows).
+Recent listings was the first, until the operator's call of 2026-11-24 released it and kept the
+gate for the next one. The gate's tests carry their own flag, so they hold whatever the real
+tables do: `src/lib/unreleased.test.ts` (the decision and the filter, and the live checks' list
+held to the tables), `src/routes/(app)/domain-loads.gating.test.ts` (both loads, for a visitor,
+another logged-in npub and the operator, with Recent listings flagged in a stand-in for its slug
+table), `marketplaces-page.gating.ssr.test.ts` beside the page (its noindex, the same way),
+`src/lib/seo/sitemap.test.ts` (out of the sitemap, on a fixture table), `indexability.test.ts`
+(a redirect rather than a page: on the real tables, so only while one has a section in
+development; `unreleased.test.ts` checks the same on its fixture), and the domain page's own SSR
+test (no card, no heading, no row, no address in the HTML when the server sent no rows).
 
 ## Logging in with Nostr: the session cookie
 

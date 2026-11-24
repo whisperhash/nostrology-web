@@ -457,11 +457,12 @@
 				 Categories has: the card carries that id and the icon that copies the address, and
 				 on a phone the page says whether this is the card that draws it - with two such
 				 sections on this pill, the one whose heading is nearest the top.
-				 STILL IN DEVELOPMENT ($lib/unreleased): the server sends `recent` only to the
-				 operator's own session, so for everyone else there is nothing here to draw. The
-				 check is on the field's PRESENCE, not on its length - an empty array is a read
-				 that found nothing, which is a different thing from a reader who may not see the
-				 section, and only the first should ever be a gate this page can lose. -->
+				 Whenever the slug table marks it in development ($lib/unreleased), the server
+				 sends `recent` only to the operator's own session, so for everyone else there is
+				 nothing here to draw. The check is on the field's PRESENCE, not on its length - an
+				 empty array is a read that found nothing, which is a different thing from a reader
+				 who may not see the section, and only the first should ever be a gate this page can
+				 lose. -->
 			{#if data.recent}
 				<RecentListings
 					rows={data.recent}

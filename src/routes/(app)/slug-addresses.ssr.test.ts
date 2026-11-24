@@ -10,7 +10,8 @@
 // in development ($lib/unreleased): the sitemap does NOT list such an address (slugTablePaths
 // takes the anonymous view) and no other reader is served the page there at all - they get a
 // 302 (found). Do not read a case here as a claim that its address is public; what each reader
-// gets is pinned in src/routes/(app)/domain-loads.test.ts and src/lib/seo/sitemap.test.ts.
+// gets is pinned in src/routes/(app)/domain-loads.test.ts, domain-loads.gating.test.ts (with a
+// fixture flag) and src/lib/seo/sitemap.test.ts.
 import type { Component } from 'svelte';
 import { render } from 'svelte/server';
 import { describe, expect, it, vi } from 'vitest';

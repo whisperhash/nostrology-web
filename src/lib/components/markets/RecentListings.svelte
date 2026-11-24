@@ -36,9 +36,9 @@
 	 * The newest live listings that open somewhere, newest first, as the server cut them
 	 * ($lib/markets/recent -> selectShowable).
 	 *
-	 * NO DEFAULT, deliberately, and it is what holds the gate: the server sends `recent` only
-	 * to a reader who may see this section while it is in development ($lib/unreleased), so the
-	 * page must render the card only when it HAS rows. A default here would make
+	 * NO DEFAULT, deliberately, and it is what holds the gate: whenever the slug table marks this
+	 * section in development ($lib/unreleased), the server sends `recent` only to a reader who may
+	 * see it, so the page must render the card only when it HAS rows. A default here would make
 	 * `rows={data.recent}` type-check with `recent` absent, and the gate would then rest on this
 	 * component drawing nothing when empty - one later change away from a visitor seeing a
 	 * headed, empty card. Without it, dropping the page's `{#if data.recent}` fails

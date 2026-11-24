@@ -1,4 +1,3 @@
-import { isRedirect } from '@sveltejs/kit';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 // Every domain page with a slug table splits its server load in two
@@ -46,20 +45,15 @@ import * as routstrLayout from './routstr/+layout.server';
 import * as routstrPage from './routstr/+page.server';
 import * as zapstorePage from './zapstore/(shell)/+page.server';
 import * as nutzapsPage from './nutzaps/(shell)/+page.server';
-import { OPERATOR_PUBKEY } from '$lib/unreleased';
-import { own } from '$lib/slug-table';
-import { SLUG_TABLES } from '$lib/slug-tables';
+import { OPERATOR, run, type Load } from './load-event.test-helper';
+import { LISTING } from './marketplaces/fixture';
 
-type Load = (event: never) => unknown;
-
-/**
- * THE CASES BELOW RUN AS THE OPERATOR, because /marketplaces' loads answer differently for
- * everyone else: Recent listings is still in development, so a visitor's load reads no
- * listings and the section's address is not a slug at all ($lib/unreleased). Running the
- * shared cases as the operator keeps them pinning the whole page; the gate itself has its own
- * describe block at the end of this file, which runs as everybody else.
- */
-const OPERATOR = { pubkey: OPERATOR_PUBKEY };
+// THE CASES BELOW RUN AS THE OPERATOR (run's default), because a section still in development
+// answers differently for everyone else ($lib/unreleased): a visitor's load reads none of its data
+// and its address is not a slug at all. Running the shared cases as the operator keeps them
+// pinning the whole page whatever is in development. The gate itself is held with a fixture flag
+// in domain-loads.gating.test.ts, and what a visitor gets from /marketplaces is the describe block
+// at the end of this file.
 
 const DOMAINS = [
 	{
@@ -103,43 +97,6 @@ beforeEach(() => {
 		if ('also' in d) (d.also as Mock).mockReset().mockResolvedValue(d.alsoFetched);
 	}
 });
-
-/** A load event at `path`, recording every read of the address and whether SvelteKit would
- * have tracked it: a read is untracked only inside `untrack`. Any property counts (SvelteKit
- * tracks pathname, search, searchParams, href, toString, toJSON...), not a chosen few. */
-function eventAt(path: string, session: { pubkey: string } | null = OPERATOR) {
-	const real = new URL('https://site.test' + path);
-	const reads: { key: string; tracked: boolean }[] = [];
-	let untracked = 0;
-	const url = new Proxy(real, {
-		get(target, key) {
-			if (typeof key === 'string') reads.push({ key, tracked: untracked === 0 });
-			const v = Reflect.get(target, key, target);
-			return typeof v === 'function' ? v.bind(target) : v;
-		}
-	});
-	const untrack = <T>(fn: () => T): T => {
-		untracked += 1;
-		try {
-			return fn();
-		} finally {
-			untracked -= 1;
-		}
-	};
-	const setHeaders = vi.fn();
-	return { event: { url, untrack, setHeaders, locals: { session } } as never, reads, setHeaders };
-}
-
-type Run = ReturnType<typeof eventAt> & { data?: unknown; redirect?: { status: number; location: string } };
-async function run(load: Load, path: string, session?: { pubkey: string } | null): Promise<Run> {
-	const e = session === undefined ? eventAt(path) : eventAt(path, session);
-	try {
-		return { data: await load(e.event), ...e };
-	} catch (err) {
-		if (isRedirect(err)) return { redirect: { status: err.status, location: err.location }, ...e };
-		throw err;
-	}
-}
 
 describe.each(DOMAINS)('$domain', (d) => {
 	const { pill } = d;
@@ -250,117 +207,42 @@ describe.each([
 	});
 });
 
-// --- Recent listings is still in development: who the loads answer for -----------------------
-// The section is visible to the operator's own session and to nobody else (the operator's call,
-// 2026-10-24). The gate has to hold in BOTH loads, for different reasons: the page load decides
-// whether the section's address is a slug at all, and the layout load decides whether anyone
-// else's browser is ever sent a listing. $lib/unreleased has the rule; these are the two places
-// it is applied.
-describe('/marketplaces, Recent listings while it is in development', () => {
+// --- Recent listings, for every reader (the operator's call, 2026-11-24) ----------------------
+// What the gate does to a section in development is held with a fixture flag in
+// domain-loads.gating.test.ts; these pin what the real table says of Recent listings: both loads
+// answer every reader as they answer the operator, rows and all.
+describe('/marketplaces, Recent listings for every reader', () => {
 	const SECTION = '/marketplaces/recent-listings';
 	const OTHER = { pubkey: 'f'.repeat(64) };
+	const READERS = [null, OTHER, OPERATOR];
+	// A row that survives the cut, so that a reader sent an emptied copy of the rows differs from
+	// one sent the rows: with the shared cases' row, which the cut drops, every reader gets [].
+	beforeEach(() => {
+		db.getMarketplacesRecentListings.mockResolvedValue([LISTING]);
+	});
 
-	it('reads no listings at all for a visitor, and sends none', async () => {
-		for (const session of [null, OTHER, { pubkey: OPERATOR_PUBKEY.slice(0, 63) }]) {
-			const r = await run(marketsLayout.load as Load, '/marketplaces', session);
-			expect(r.data, JSON.stringify(session)).toEqual({ snapshot: { generated_at: 'fixture' } });
-			expect(db.getMarketplacesRecentListings).not.toHaveBeenCalled();
+	it('reads the listings for every reader, and sends every reader the rows', async () => {
+		for (const session of READERS) {
+			db.getMarketplacesRecentListings.mockClear();
+			const data = (await run(marketsLayout.load as Load, '/marketplaces', session)).data as Record<string, unknown>;
+			expect(db.getMarketplacesRecentListings, JSON.stringify(session)).toHaveBeenCalledTimes(1);
+			expect(Object.keys(data).sort(), JSON.stringify(session)).toEqual(['recent', 'recentAt', 'snapshot']);
+			expect(data.recent, JSON.stringify(session)).toEqual([LISTING]);
 		}
 	});
 
-	it('reads them for the operator, and says when it read them', async () => {
-		const r = await run(marketsLayout.load as Load, '/marketplaces', OPERATOR);
-		expect(db.getMarketplacesRecentListings).toHaveBeenCalledTimes(1);
-		expect(Object.keys(r.data as object).sort()).toEqual(['recent', 'recentAt', 'snapshot']);
-	});
-
-	it('takes the pubkey in either case, since the same key is the same person', async () => {
-		const r = await run(marketsLayout.load as Load, '/marketplaces', {
-			pubkey: OPERATOR_PUBKEY.toUpperCase()
-		});
-		expect(db.getMarketplacesRecentListings).toHaveBeenCalledTimes(1);
-		expect(r.data).toHaveProperty('recent');
-	});
-
-	it("answers the section's address for a visitor exactly as it answers a word nobody has used", async () => {
-		for (const session of [null, OTHER]) {
+	it("answers the section's address for every reader with the page, opened at the section", async () => {
+		for (const session of READERS) {
 			const r = await run(marketsPage.load as Load, SECTION, session);
-			expect(r.redirect, JSON.stringify(session)).toEqual({
-				status: 302,
-				location: '/marketplaces#gone'
+			expect(r.data, JSON.stringify(session)).toEqual({
+				target: { kind: 'page', pill: 'catalogue', section: 'recent-listings' }
 			});
-			expect(r.setHeaders).toHaveBeenCalledWith({ 'cache-control': 'no-store' });
-			// and the document is not fetched for it either
+			expect(r.setHeaders, JSON.stringify(session)).not.toHaveBeenCalled();
+			// and the layout sends the document and the rows there, as at any page address
+			db.getMarketplacesRecentListings.mockClear();
 			const l = await run(marketsLayout.load as Load, SECTION, session);
-			expect(l.data).toEqual({});
-			expect(db.getMarketplacesSnapshot).not.toHaveBeenCalled();
-			expect(db.getMarketplacesRecentListings).not.toHaveBeenCalled();
+			expect((l.data as Record<string, unknown>).recent, JSON.stringify(session)).toEqual([LISTING]);
+			expect(db.getMarketplacesRecentListings, JSON.stringify(session)).toHaveBeenCalledTimes(1);
 		}
-	});
-
-	it("answers the section's address for the operator", async () => {
-		const r = await run(marketsPage.load as Load, SECTION, OPERATOR);
-		expect(r.data).toEqual({
-			target: { kind: 'page', pill: 'catalogue', section: 'recent-listings' }
-		});
-		expect(r.setHeaders).not.toHaveBeenCalled();
-	});
-
-	// --- and the same two properties, generically, so the NEXT one is held with no new test ---
-	// Both cases below walk the real slug tables, so a second section marked `unreleased` in any
-	// domain whose loads this file already imports is covered the day the flag is set - which is
-	// the gap a review found: the cases above are hand-written for /marketplaces, and a new
-	// domain that forgot `visibleTable` or `seesSection` would fail nothing.
-
-	it('redirects a visitor away from EVERY address its table still has in development', async () => {
-		let checked = 0;
-		for (const d of DOMAINS) {
-			const t = own(SLUG_TABLES, d.domain.slice(1));
-			if (!t) continue;
-			for (const [slug, section] of Object.entries(t.sections)) {
-				if (section.unreleased !== true) continue;
-				checked += 1;
-				const r = await run(d.page, `${d.domain}/${slug}`, null);
-				expect(r.redirect, `${d.domain}/${slug}`).toEqual({
-					status: 302,
-					location: `${d.domain}#gone`
-				});
-			}
-		}
-		expect(checked, 'no domain has a section in development - delete this case').toBeGreaterThan(0);
-	});
-
-	it('sends a visitor LESS than it sends the operator, wherever a table has one', async () => {
-		// The data half, generically: a gated section's rows must be ABSENT from a visitor's
-		// document, not present and empty, so the visitor's data has strictly fewer keys. A
-		// domain that forgot the gate sends them both the same thing and fails here.
-		let checked = 0;
-		for (const d of DOMAINS) {
-			const t = own(SLUG_TABLES, d.domain.slice(1));
-			if (!t || !Object.values(t.sections).some((section) => section.unreleased === true)) continue;
-			checked += 1;
-			const anon = Object.keys((await run(d.layout, d.domain, null)).data as object);
-			const op = Object.keys((await run(d.layout, d.domain, OPERATOR)).data as object);
-			expect(anon.length, d.domain).toBeLessThan(op.length);
-			expect(op, d.domain).toEqual(expect.arrayContaining(anon));
-		}
-		expect(checked).toBeGreaterThan(0);
-	});
-
-	it('leaves every other address of the page alone for a visitor', async () => {
-		for (const path of ['/marketplaces', '/marketplaces/catalogue', '/marketplaces/categories', '/marketplaces/methodology']) {
-			const r = await run(marketsPage.load as Load, path, null);
-			expect(r.redirect, path).toBeUndefined();
-			expect(r.data, path).toHaveProperty('target');
-		}
-	});
-
-	it("answers Categories' address for a visitor with the page, and sends no listing with it", async () => {
-		// A section that is for everyone, on the same pill as the one that is not (2026-11-04).
-		const page = await run(marketsPage.load as Load, '/marketplaces/categories', null);
-		expect(page.data).toEqual({ target: { kind: 'page', pill: 'catalogue', section: 'categories' } });
-		const layout = await run(marketsLayout.load as Load, '/marketplaces/categories', null);
-		expect(layout.data).toEqual({ snapshot: { generated_at: 'fixture' } });
-		expect(db.getMarketplacesRecentListings).not.toHaveBeenCalled();
 	});
 });

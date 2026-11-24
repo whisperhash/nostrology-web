@@ -19,7 +19,7 @@ import { describe, expect, it, vi } from 'vitest';
 import BubbleMap from '$lib/components/markets/BubbleMap.svelte';
 import { MARKETPLACES_SLUGS } from '$lib/slug-tables/marketplaces';
 import MarketplacesPage from './+page.svelte';
-import { SNAPSHOT } from './fixture';
+import { LISTING, SNAPSHOT } from './fixture';
 
 // Every page renders <SocialMeta>, which reads $page; a page rendered on its own has no
 // router, so the store is supplied here - same pattern as the other page tests.
@@ -100,8 +100,9 @@ const meta = (head: string, attr: string, key: string) => {
 };
 
 // Categories' own address (/marketplaces/categories, 2026-11-04), rendered the way the server
-// renders it, as below for Recent listings - but for EVERY reader: the page's data here is what
-// anyone but the operator is sent, the snapshot and the answer, with no `recent`.
+// renders it, as below for Recent listings. The page's data here is the snapshot and the answer
+// with no `recent` at all - what a reader is sent while Recent listings is in development - so
+// these show the card does not depend on it.
 describe('/marketplaces/categories on the server', () => {
 	const ENTRY = MARKETPLACES_SLUGS.sections.categories;
 	const preview = ENTRY.preview!;
@@ -169,29 +170,7 @@ describe('/marketplaces/categories on the server', () => {
 describe('/marketplaces/recent-listings on the server', () => {
 	const ENTRY = MARKETPLACES_SLUGS.sections['recent-listings'];
 	const preview = ENTRY.preview!;
-	const PK = '2e7afe3f9af8c3dc90d6e8acaf5d7aa926a54f0c22f1c555707309c059fe831b';
-	const RECENT = [
-		{
-			pubkey: PK,
-			d_tag: 'barattolo-3195',
-			event_id: null,
-			effective_ts: 1792686600,
-			title: 'Buono Amazon 25 scontato',
-			status: 'active',
-			client: '',
-			location: 'Italia',
-			cc: 'IT',
-			categories: [],
-			price: ['price', '23.50', 'EUR'],
-			seller_name: null,
-			market_image: null,
-			expires_at: null,
-			title_tag: null,
-			visibility: '',
-			content_warning: null,
-			summary_len: null
-		}
-	];
+	const RECENT = [LISTING];
 	const at = () => {
 		current.url = new URL('https://site.test/marketplaces/recent-listings');
 		return render(MarketplacesPage, {
@@ -266,11 +245,12 @@ describe('/marketplaces/recent-listings on the server', () => {
 	});
 
 	it('draws no card, and no listing of anyone, when the server sent no rows', () => {
-		// The page's own half of the gate, which the loads' half is in domain-loads.test.ts:
-		// the section is drawn only when `recent` is PRESENT, so a visitor - who is sent the
-		// field at all - gets the pill without the card. Rendered here at the section's own
-		// address, which a visitor never reaches, precisely so that the page is shown to be
-		// safe even if it ever did.
+		// The page's own half of the gate, whose loads' half is domain-loads.gating.test.ts: the
+		// section is drawn only when `recent` is PRESENT, which it is for every reader unless the
+		// slug table marks the section in development ($lib/unreleased) - and then for the
+		// operator alone, so a visitor, who is not sent the field at all, gets the pill without the
+		// card. Rendered here at the section's own address, which such a visitor never reaches, so
+		// that the page is shown to be safe even if one did.
 		current.url = new URL('https://site.test/marketplaces/recent-listings');
 		const { body } = render(MarketplacesPage, {
 			props: {
@@ -289,40 +269,15 @@ describe('/marketplaces/recent-listings on the server', () => {
 		expect(body).not.toContain('/marketplaces/recent-listings');
 	});
 
-	it('leaks the section through no part of the HEAD either, rows or no rows', () => {
-		// The head is where the name would hide: the title, og:title, twitter:title and the
-		// description all come from the section's preview when the target names it. A reader
-		// without the section is never served this page at this address - the page load answers
-		// them a 302 (found) - so this is what the HTML would carry if that gate were ever lost.
-		current.url = new URL('https://site.test/marketplaces/recent-listings');
-		const { head } = render(MarketplacesPage, {
-			props: {
-				data: {
-					snapshot: SNAPSHOT,
-					target: { kind: 'page', pill: ENTRY.pill, section: 'recent-listings' }
-				}
-			}
-		});
-		// ... and with no rows it still names the section, because the TARGET does. So the one
-		// thing asserted here is that such a page is not indexable: the gate is the server's
-		// answer, and this is the belt under it.
-		expect(head).toContain('<meta name="robots" content="noindex"');
+	it('is an indexable page: it is for every reader, and the sitemap lists it', () => {
+		// At the address of a section in development the page carries noindex, the belt under the
+		// server's 302 (found) for everyone else; marketplaces-page.gating.ssr.test.ts holds that
+		// with a fixture flag.
+		expect(ENTRY.unreleased).toBeUndefined();
+		expect(at().head).not.toContain('noindex');
 	});
 
-	it('noindexes the section\'s address while it is in development, and nothing else', () => {
-		// The operator's own view, which IS served: indexing an address no other reader can
-		// reach would put a heading nobody can see into a search result.
-		expect(at().head).toContain('<meta name="robots" content="noindex"');
-		for (const path of ['/marketplaces', '/marketplaces/catalogue', '/marketplaces/methodology']) {
-			current.url = new URL('https://site.test' + path);
-			const { head } = render(MarketplacesPage, {
-				props: { data: { snapshot: SNAPSHOT, target: { kind: 'page', pill: 'overview' } } }
-			});
-			expect(head, path).not.toContain('noindex');
-		}
-	});
-
-	it('draws it for the operator, who is the one reader the server sends rows to', () => {
+	it('draws it with the rows the server sent, which it sends every reader', () => {
 		const { body } = at();
 		expect(body).toContain(`id="${ENTRY.elementId}"`);
 		expect(body).toContain('Buono Amazon');

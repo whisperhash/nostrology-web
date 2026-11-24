@@ -26,10 +26,11 @@ const RECENT_SECTION = 'recent-listings';
 // and the rest of /marketplaces does not depend on it, so it resolves to no rows and the
 // section is left out. The snapshot read still fails loud.
 //
-// RECENT LISTINGS IS STILL IN DEVELOPMENT, so for anyone but the operator this load does
-// not read it at all ($lib/unreleased): no query, no rows in the SSR payload and none in
-// this route's __data.json, and the page draws no card because it is given nothing. That
-// absence IS the gate - the page renders the section only when the server sent rows - and
+// THE SECTION'S SLUG-TABLE ENTRY DECIDES WHO IS SENT THESE ROWS ($lib/unreleased). Released
+// (the operator's call of 2026-11-24), every reader is. Marked in development, this load does
+// not read them at all for anyone but the operator: no query, no rows in the SSR payload and
+// none in this route's __data.json, and the page draws no card because it is given nothing.
+// That absence IS the gate - the page renders the section only when the server sent rows - and
 // `recent` being absent rather than empty is what tells the two cases apart in a test.
 //
 // `seesSection` is asked rather than `seesUnreleased`, so the SLUG TABLE'S FLAG is the only
@@ -93,10 +94,9 @@ export const load: LayoutServerLoad = async ({ url, untrack, locals }) => {
  * small to fill the table is not the cut's doing, and a warning that fires on a fresh or tiny
  * database is a warning nobody will read twice.
  *
- * ONE LINE PER READ, so one per visit that fetches the document. While the section is still in
- * development that is the operator alone, i.e. a handful of lines a day at most; it is worth
- * revisiting if it is ever public AND short at the same time, which is the state this exists to
- * announce.
+ * ONE LINE PER READ, so one per visit that fetches the document: the operator's alone while the
+ * section is in development, every reader's once it is released. That is worth revisiting if it
+ * is ever public AND short at the same time, which is the state this exists to announce.
  *
  * The JSON shape is the nozzl logging convention (hooks.server.ts writes its page-view line the
  * same way), so Loki's `| json` gives `shown` and `expected` as fields rather than text to
