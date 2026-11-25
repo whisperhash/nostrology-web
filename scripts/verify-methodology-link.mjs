@@ -256,6 +256,10 @@ try {
        */
       const settle = async (ms = 9000) => {
         const until = Date.now() + ms;
+        // An old link's full load ($lib/legacy-hash's location.replace) can hand the address to
+        // the new document before its <html> exists, and STATE would read null there. Wait for
+        // it, within the same deadline: a page that never renders still fails below.
+        while (Date.now() < until && !(await ev('!!document.documentElement && !!document.body'))) await sleep(100);
         let last = await ev(STATE);
         let same = 0;
         while (Date.now() < until) {
