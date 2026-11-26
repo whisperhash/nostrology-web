@@ -25,7 +25,14 @@
 
 <footer>
 	<div class="{container} foot">
-		<span>nostrolo&middot;gy - Nostr ecosystem observatory.</span>
+		<span
+			>Nostrology is <a
+				class="source"
+				href="https://github.com/whisperhash/nostrology-data"
+				target="_blank"
+				rel="noopener">open source software</a
+			>.</span
+		>
 		<span class="foot-nav">
 			{#each items as item, i (item.href)}
 				{#if i > 0}<span aria-hidden="true">&middot;</span>{/if}
@@ -76,5 +83,17 @@
 	}
 	footer a.mcp {
 		color: var(--teal-2);
+	}
+	/* The link inside the footer's sentence. In the footer's own link style (the text's grey, no
+	   underline) it would read as plain text, so it is underlined the way the site underlines the
+	   links in its tables (/git's repositories, /marketplaces' Recent listings): a gray-600 line
+	   2px below the text. On hover the rule above brightens the text, and the line follows it. */
+	footer a.source {
+		text-decoration: underline;
+		text-decoration-color: #4b5563;
+		text-underline-offset: 2px;
+	}
+	footer a.source:hover {
+		text-decoration-color: currentColor;
 	}
 </style>
