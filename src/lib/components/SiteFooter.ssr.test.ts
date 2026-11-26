@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // The footer's line as the server sends it, which is what a reader has before any script runs:
-// "Nostrology is open source software.", with no space before the full stop, and its last three
+// "Nostrology is open-source software.", with no space before the full stop, and its last three
 // words, and only those, a link opening the repository in a new tab. SiteFooter.test.ts holds the
 // same in the client's render.
 import { render } from 'svelte/server';
@@ -29,13 +29,13 @@ const links = (markup: string) =>
 const line = () => /<span[^>]*>(Nostrology is [\s\S]*?)<\/span>/.exec(html())?.[1] ?? '';
 
 describe('SiteFooter on the server', () => {
-	it('sends "Nostrology is open source software.", with no space before the full stop', () => {
-		expect(line().replace(/<[^>]*>/g, '')).toBe('Nostrology is open source software.');
+	it('sends "Nostrology is open-source software.", with no space before the full stop', () => {
+		expect(line().replace(/<[^>]*>/g, '')).toBe('Nostrology is open-source software.');
 	});
 
-	it('sends only "open source software" in the line as a link, to the repository in a new tab', () => {
+	it('sends only "open-source software" in the line as a link, to the repository in a new tab', () => {
 		expect(links(line())).toEqual([
-			{ text: 'open source software', href: REPOSITORY, target: '_blank', rel: 'noopener' }
+			{ text: 'open-source software', href: REPOSITORY, target: '_blank', rel: 'noopener' }
 		]);
 	});
 

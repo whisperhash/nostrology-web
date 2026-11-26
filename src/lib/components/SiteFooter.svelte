@@ -30,7 +30,7 @@
 				class="source"
 				href="https://github.com/whisperhash/nostrology-data"
 				target="_blank"
-				rel="noopener">open source software</a
+				rel="noopener">open-source software</a
 			>.</span
 		>
 		<span class="foot-nav">
